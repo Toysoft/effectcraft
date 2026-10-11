@@ -616,9 +616,16 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let cell_edit = |app: &mut EffectcraftApp, ui: &mut egui::Ui, actions: &mut Vec<(String, serde_json::Value)>, field: &str, cell: Rect| -> bool {
             let Some((eid, ef, mut buf)) = editing.clone().filter(|(e, f, _)| *e == id.0 && f == field) else { return false };
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(cell));
-            let resp = child.add(egui::TextEdit::singleline(&mut buf).desired_width(cell.width()).font(Tokens::ui(12.0)));
+            // The field keeps Tab (egui would move the keyboard to the next widget, where Enter no
+            // longer renames, #881): Tab commits like Enter and gives the keyboard back to the panel.
+            let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, ..Default::default() };
+            let resp = child.add(egui::TextEdit::singleline(&mut buf).desired_width(cell.width()).font(Tokens::ui(12.0)).event_filter(filter));
             app.auto.add(&format!("project.item.{}.{field}Edit", id.0), cell, field);
-            if resp.lost_focus() {
+            let tab = resp.has_focus() && ctx.input(|i| i.key_pressed(egui::Key::Tab));
+            if tab {
+                resp.surrender_focus();
+            }
+            if resp.lost_focus() || tab {
                 ctx.data_mut(|d| d.remove::<Editing>(edit_id()));
                 if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                     let (cmd, params) = if ef == "name" {
