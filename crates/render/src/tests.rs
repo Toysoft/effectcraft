@@ -135,6 +135,32 @@ fn track_matte_alpha() {
     assert!(img.get(150, 50)[3] < 0.01);
 }
 
+/// Every matte kind with an opaque white 50×50 matte at the left of a 200×100 comp: the plain
+/// kinds keep the fill only inside the matte, the inverted kinds only outside it (#864).
+#[test]
+fn track_matte_kinds_keep_and_invert() {
+    for (kind, inside) in [(MatteKind::Alpha, true), (MatteKind::AlphaInverted, false), (MatteKind::Luma, true), (MatteKind::LumaInverted, false)] {
+        let (mut p, cid, comp) = setup();
+        let mut matte = solid(&mut p, &comp, [1.0, 1.0, 1.0], 50, 50);
+        matte.props.prop_mut("transform/position").unwrap().value = Value::Vec3([50.0, 50.0, 0.0]);
+        matte.switches.video = false;
+        let mut fill = solid(&mut p, &comp, [0.0, 0.0, 1.0], 200, 100);
+        fill.track_matte = Some(TrackMatte { layer: matte.id, kind });
+        let c = p.comp_mut(cid).unwrap();
+        c.layers.push(matte);
+        c.layers.push(fill);
+        let img = render_frame(&p, cid, Tick::ZERO, 1.0);
+        let (a_in, a_out) = (img.get(50, 50)[3], img.get(150, 50)[3]);
+        if inside {
+            assert!(a_in > 0.99 && a_out < 0.01, "{kind:?}: {a_in} inside, {a_out} outside");
+            assert!(img.get(50, 50)[2] > 0.99, "{kind:?} keeps the fill's colour");
+        } else {
+            assert!(a_in < 0.01 && a_out > 0.99, "{kind:?}: {a_in} inside, {a_out} outside");
+            assert!(img.get(150, 50)[2] > 0.99, "{kind:?} keeps the fill's colour");
+        }
+    }
+}
+
 #[test]
 fn shape_layer_draws_fill_and_stroke() {
     let (mut p, cid, comp) = setup();

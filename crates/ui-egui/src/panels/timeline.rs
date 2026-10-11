@@ -1942,7 +1942,9 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         Some(m) => comp.layer(m.layer).map(|l| format!("{} {}", idx_of(l.id), l.name)).unwrap_or("None".into()),
                         None => "No Track Matte".into(),
                     };
-                    let tresp = widgets::dropdown(ui, mr, &label, &t, egui::Id::new(("trkmat", layer.id.0)));
+                    // The cell is too narrow for the mode as well: it is in the tooltip and ticked in the menu.
+                    let tip = layer.track_matte.map(|m| format!("{label} · {}", crate::i18n::tr(m.kind.label())));
+                    let tresp = widgets::dropdown_tip(ui, mr, &label, tip.as_deref(), &t, egui::Id::new(("trkmat", layer.id.0)));
                     app.auto.add(&format!("timeline.layer.{}.trackMatte", layer.id.0), mr, "Track Matte");
                     let pop = egui::Id::new(("trk-pop", layer.id.0));
                     if tresp.clicked() {
@@ -1962,17 +1964,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                             opts.push(k.label().into());
                         }
                     }
-                    if let Some(i) = widgets::popup_menu(ui, pop, mr.left_bottom(), &opts, None) {
-                        if i == 0 {
-                            actions.push(("layer.setTrackMatte".into(), json!({"layer": layer.id.0, "matte": null})));
-                        } else if i >= 2 && i < 2 + candidates.len() {
-                            let kind = layer.track_matte.map(|m| m.kind).unwrap_or_default();
-                            actions
-                                .push(("layer.setTrackMatte".into(), json!({"layer": layer.id.0, "matte": candidates[i - 2].id.0, "kind": kind_name(kind)})));
-                        } else if let Some(k) = MatteKind::ALL.into_iter().find(|k| k.label() == opts[i])
-                            && let Some(m) = layer.track_matte
-                        {
-                            actions.push(("layer.setTrackMatte".into(), json!({"layer": layer.id.0, "matte": m.layer.0, "kind": kind_name(k)})));
+                    let current = layer.track_matte.and_then(|m| opts.iter().position(|o| o == m.kind.label()));
+                    if let Some(i) = widgets::popup_menu(ui, pop, mr.left_bottom(), &opts, current) {
+                        let ids: Vec<LayerId> = candidates.iter().map(|l| l.id).collect();
+                        if let Some(a) = opts.get(i).and_then(|o| track_matte_pick(layer, &ids, i, o)) {
+                            actions.push(a);
                         }
                     }
                     if layer.track_matte.is_some() {
@@ -3412,6 +3408,21 @@ fn text_anim_popups(
     }
 }
 
+/// The command for the Track Matte menu item `i` (`choice`) of `layer`, whose menu lists "No Track
+/// Matte", a separator, the matte `candidates`, a separator and the modes. A mode without a matte
+/// layer takes the layer above, like Layer ▸ Track Matte (#864: it used to do nothing).
+fn track_matte_pick(layer: &Layer, candidates: &[LayerId], i: usize, choice: &str) -> Option<(String, serde_json::Value)> {
+    if i == 0 {
+        return Some(("layer.setTrackMatte".into(), json!({"layer": layer.id.0, "matte": null})));
+    }
+    if let Some(m) = i.checked_sub(2).and_then(|j| candidates.get(j)) {
+        let kind = layer.track_matte.map(|m| m.kind).unwrap_or_default();
+        return Some(("layer.setTrackMatte".into(), json!({"layer": layer.id.0, "matte": m.0, "kind": kind_name(kind)})));
+    }
+    let k = MatteKind::ALL.into_iter().find(|k| k.label() == choice)?;
+    Some(("layer.trackMatte".into(), json!({"layers": [layer.id.0], "op": kind_name(k)})))
+}
+
 fn kind_name(k: MatteKind) -> &'static str {
     match k {
         MatteKind::Alpha => "alpha",
@@ -3735,6 +3746,40 @@ mod tests {
         assert_eq!(edge_scroll_speed_x(100.0, 500.0, 300.0), 0.0);
         assert!(edge_scroll_speed_x(100.0, 500.0, 501.0) > 0.0 && edge_scroll_speed_x(100.0, 500.0, 99.0) < 0.0);
         assert!(edge_scroll_speed_x(100.0, 500.0, 600.0) > edge_scroll_speed_x(100.0, 500.0, 520.0));
+    }
+
+    /// #864: picking only a mode in a layer's Track Matte menu sets a matte (the layer above);
+    /// it used to close the menu and change nothing.
+    #[test]
+    fn a_track_matte_mode_without_a_matte_takes_the_layer_above() {
+        let mut s = effectcraft_engine::Session::default();
+        s.execute("comp.new", json!({"name": "T", "width": 64, "height": 64, "duration": 1})).unwrap();
+        for name in ["Chain Bottom", "Matte", "Chain Top"] {
+            s.execute("layer.newSolid", json!({"name": name, "color": "#ffffff", "width": 64, "height": 64})).unwrap();
+        }
+        let find = |s: &effectcraft_engine::Session, n: &str| s.active_comp().unwrap().layers.iter().find(|l| l.name == n).unwrap().clone();
+        let (bottom, matte, top) = (find(&s, "Chain Bottom"), find(&s, "Matte"), find(&s, "Chain Top"));
+        let candidates = [top.id, matte.id];
+        let pick = |s: &mut effectcraft_engine::Session, name: &str, i: usize, choice: &str| {
+            let (id, params) = track_matte_pick(&find(s, name), &candidates, i, choice).expect("a menu item is an action");
+            s.execute(&id, params)
+        };
+        pick(&mut s, "Chain Bottom", 5, "Alpha Inverted Matte").unwrap();
+        let m = find(&s, "Chain Bottom").track_matte.expect("a matte");
+        assert_eq!((m.layer, m.kind), (matte.id, MatteKind::AlphaInverted));
+        assert!(!find(&s, "Matte").switches.video, "the matte layer is hidden");
+        // A mode change keeps the matte layer; a matte change keeps the mode.
+        pick(&mut s, "Chain Bottom", 6, "Luma Matte").unwrap();
+        assert_eq!(find(&s, "Chain Bottom").track_matte.map(|m| (m.layer, m.kind)), Some((matte.id, MatteKind::Luma)));
+        pick(&mut s, "Chain Bottom", 2, "1. Chain Top").unwrap();
+        assert_eq!(find(&s, "Chain Bottom").track_matte.map(|m| (m.layer, m.kind)), Some((top.id, MatteKind::Luma)));
+        assert!(s.undo());
+        assert_eq!(find(&s, "Chain Bottom").track_matte.map(|m| m.layer), Some(matte.id), "one undo step per pick");
+        // The top layer has nothing above it: an error for the status bar, not a silent no-op.
+        assert!(pick(&mut s, "Chain Top", 5, "Alpha Matte").is_err());
+        pick(&mut s, "Chain Bottom", 0, "No Track Matte").unwrap();
+        assert!(find(&s, "Chain Bottom").track_matte.is_none());
+        assert!(track_matte_pick(&bottom, &candidates, 1, "-").is_none(), "a separator does nothing");
     }
 
     /// A comp with two solids; "Box" has an animated Position and a Gaussian Blur.
