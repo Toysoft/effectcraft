@@ -14,6 +14,7 @@ pub mod autosave;
 pub mod camera_track;
 pub mod commands;
 pub mod config;
+pub mod console_effect;
 pub mod demo;
 pub mod footage_check;
 pub mod footage_reload;
@@ -130,6 +131,10 @@ pub trait Services: Send + Sync {
     /// Whether `path` is a folder (dropped or picked folders import their files).
     fn is_dir(&self, path: &str) -> bool {
         std::path::Path::new(path).is_dir()
+    }
+    /// Delete a file the app made for itself (an Console Effect snapshot).
+    fn remove_file(&self, path: &str) -> std::io::Result<()> {
+        std::fs::remove_file(path)
     }
 }
 
@@ -423,6 +428,11 @@ pub struct Session {
     /// Scripts' `app.settings`, kept in the settings store (see
     /// [`commands::scripts::SCRIPT_SETTINGS_FILE`]).
     pub script_settings: commands::scripts::ScriptSettings,
+    /// Console Effect's favorites, aliases, overrides, blacklist, shortcuts and options, kept in the
+    /// settings store ([`console_effect::SETTINGS_FILE`]).
+    pub console_effect: console_effect::Settings,
+    /// Bumped whenever [`Session::console_effect`] changes (frontends refresh their results).
+    pub console_effect_revision: u64,
     /// Frontend-only commands offered for binding.
     pub ui_commands: Vec<shortcuts::UiCommand>,
     /// Cache of the resolved active preset (read it with [`Session::shortcuts`]).
@@ -551,6 +561,8 @@ impl Default for Session {
             config: None,
             keymaps: shortcuts::Keymaps::default(),
             script_settings: Default::default(),
+            console_effect: Default::default(),
+            console_effect_revision: 0,
             ui_commands: vec![],
             shortcut_table: std::sync::OnceLock::new(),
             autosave: autosave::AutoSaveState::default(),

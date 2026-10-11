@@ -811,6 +811,20 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             crate::panels::shortcut_editor::open(app);
             Value::Null
         }
+        "app.consoleEffect" => {
+            crate::panels::console_effect::open(app, ctx, p.get("query").and_then(Value::as_str).unwrap_or_default());
+            Value::Null
+        }
+        "consoleEffect.openGallery" => {
+            app.console_gallery.open = true;
+            app.console_gallery.dirty = true;
+            Value::Null
+        }
+        "consoleEffect.openSettings" => {
+            crate::panels::console_effect::open_settings_page(app, &p);
+            Value::Null
+        }
+        "consoleEffect.copyFrame" => crate::panels::console_effect::copy_frame(app, ctx, p.get("alpha").and_then(Value::as_bool))?,
         "app.templates" => {
             let kind = p.get("kind").and_then(Value::as_str).unwrap_or("renderSettings");
             crate::panels::rq_templates::open(app, ctx, kind);
@@ -1196,6 +1210,12 @@ fn file_dialog(app: &mut EffectcraftApp, id: &str, params: &Value) -> Option<Res
         "comp.saveFrameAsExr" => ("path", Ask::Save("Frame.exr")),
         "file.watchFolder" if params.get("stop").is_none() => ("folder", Ask::Save("Watch Folder")),
         "anim.savePreset" => ("path", Ask::Save("Preset.ecpreset")),
+        "consoleEffect.saveFrame" if params.get("format").and_then(Value::as_str) == Some("jpg") => ("path", Ask::Save("Frame.jpg")),
+        "consoleEffect.saveFrame" => ("path", Ask::Save("Frame.png")),
+        "consoleEffect.exportSettings" => ("path", Ask::Save("Console Effect Settings.json")),
+        "consoleEffect.importSettings" => ("path", Ask::Open(&["json"])),
+        "consoleEffect.exportSnapshots" => ("folder", Ask::Folder),
+        "consoleEffect.override" if params.get("overridePreset").is_none() => ("overridePreset", Ask::Open(&["ecpreset"])),
         "anim.applyPreset" => ("path", Ask::Open(&["ecpreset", "json"])),
         "view.exportGuides" => ("path", Ask::Save("Guides.json")),
         "view.importGuides" => ("path", Ask::Open(&["json"])),

@@ -32,6 +32,9 @@ pub fn specs() -> Vec<CommandSpec> {
         fe!("app.showAll", "Show All", [], None, "{}", always),
         fe!("app.quit", "Quit EffectCraft", [], Some("Cmd+Q"), "{}", always),
         fe!("app.commandPalette", "Quick Apply...", ["Edit"], Some("Cmd+Shift+Space"), "{query?}", always),
+        // Console Effect (`crate::console_effect`): the search box at the pointer. Ctrl+Space everywhere (on
+        // macOS Cmd+Space is Spotlight's).
+        fe!("app.consoleEffect", "Console Effect...", ["Edit"], Some("Ctrl+Space"), "{query?}", always),
         fe!("app.keyboardShortcuts", "Keyboard Shortcuts", ["Edit"], Some("Cmd+Alt+'"), "{}", always),
         fe!("app.templates", "Templates", [], None, "{kind: renderSettings|outputModule}", always),
         fe!("app.find", "Find", ["File"], Some("Cmd+F"), "{query?}", always),
@@ -86,7 +89,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Show Panel",
             [],
             None,
-            "{panel: project|effectControls|composition|layer|timeline|info|audio|preview|effectsPresets|properties|character|paragraph|align|tracker|wiggler|smoother|motionSketch|paint|brushes|renderQueue|flowchart|history|markers|tools|lumetriScopes|footage|mediaBrowser|metadata|progress|contentAwareFill|createNullsFromPaths|vrCompEditor}",
+            "{panel: project|effectControls|composition|layer|timeline|info|audio|preview|effectsPresets|properties|character|paragraph|align|tracker|wiggler|smoother|motionSketch|paint|brushes|renderQueue|flowchart|history|markers|tools|lumetriScopes|footage|mediaBrowser|metadata|progress|contentAwareFill|createNullsFromPaths|vrCompEditor|consoleEffect}",
             always
         ),
         fe!(

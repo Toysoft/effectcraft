@@ -40,6 +40,14 @@ const REFUSED: &[&str] = &[
     "layer.openSource",
     "help.revealLogFile",
     "file.autoSave",
+    // Console Effect: its settings name preset files anywhere (shortcuts, overrides), and its gallery
+    // is the app's own folder.
+    "consoleEffect.apply",
+    "consoleEffect.snapshot",
+    "consoleEffect.deleteSnapshots",
+    "consoleEffect.exportSnapshots",
+    "consoleEffect.importSnapshots",
+    "consoleEffect.revealGallery",
 ];
 
 /// Commands that read files named by these parameters.
@@ -64,6 +72,8 @@ const READS: &[(&str, &[&str])] = &[
     ("effect.plugins.load", &["path", "folder"]),
     ("mediaBrowser.go", &["path"]),
     ("mediaBrowser.addFavorite", &["path"]),
+    ("consoleEffect.importSettings", &["path"]),
+    ("consoleEffect.override", &["overridePreset"]),
 ];
 
 /// Commands that write files named by these parameters.
@@ -84,6 +94,8 @@ const WRITES: &[(&str, &[&str])] = &[
     ("essential.exportTemplate", &["path"]),
     ("shortcuts.export", &["path"]),
     ("renderQueue.add", &["output", "path"]),
+    ("consoleEffect.exportSettings", &["path"]),
+    ("consoleEffect.saveFrame", &["path"]),
 ];
 
 /// Commands that write where they are not told: the project's file, the Render Queue's outputs.
@@ -156,7 +168,8 @@ impl Confinement {
         let (named, access) = match (keys_of(WRITES, id), keys_of(READS, id)) {
             (Some(k), _) => (k, Access::Write),
             (None, Some(k)) => (k, Access::Read),
-            (None, None) if id.starts_with("renderQueue.") || id == "prefs.set" => (&[][..], Access::Write),
+            // (Console Effect's gallery folder is where its snapshots would be written.)
+            (None, None) if id.starts_with("renderQueue.") || id == "prefs.set" || id == "consoleEffect.setSettings" => (&[][..], Access::Write),
             (None, None) => (&[][..], Access::Read),
         };
         let mut given = false;
