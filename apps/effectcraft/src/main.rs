@@ -198,6 +198,9 @@ fn main() -> eframe::Result {
             if let Some(r) = recovery {
                 app.offer_recovery(r);
             }
+            if control_port.is_none() {
+                app.check_updates_on_startup();
+            }
             #[cfg(target_os = "linux")]
             if let Some(note) = wayland_drop_notice(std::env::var_os("WAYLAND_DISPLAY").as_deref(), std::env::var_os("WINIT_UNIX_BACKEND").as_deref())
                 && app.ui.status.is_empty()

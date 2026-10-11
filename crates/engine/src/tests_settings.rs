@@ -650,3 +650,19 @@ fn render_backend_says_why_it_renders_on_the_cpu() {
     assert_eq!(why(&mut s), json!("headless: renders on the CPU unless started with --gpu"));
     assert_eq!(s.execute("render.backend", json!({"backend": "cpu"})).unwrap()["why"], json!("the project's renderer is Mercury Software Only"));
 }
+
+#[test]
+fn check_updates_on_startup_setting() {
+    let mut p = Prefs::default();
+    assert!(p.general.check_updates_on_startup);
+    assert_eq!(p.get("general.checkUpdatesOnStartup"), Some(json!(true)));
+    p.set("general.checkUpdatesOnStartup", json!(false)).unwrap();
+    assert!(!p.general.check_updates_on_startup);
+    assert_eq!(p.get("general.checkUpdatesOnStartup"), Some(json!(false)));
+    let page = crate::prefs::pages().into_iter().find(|pg| pg.id == "general").unwrap();
+    let listed = page.items.iter().any(|i| {
+        matches!(i, crate::prefs::Item::Setting { key: "general.checkUpdatesOnStartup", kind: crate::prefs::Kind::Bool, live: true, .. })
+    });
+    assert!(listed, "Settings ▸ General offers checkUpdatesOnStartup");
+}
+

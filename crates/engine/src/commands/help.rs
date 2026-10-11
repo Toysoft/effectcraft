@@ -51,5 +51,10 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             sibling
         ),
+        cmd!("help.checkUpdates", "Check for Updates...", ["Help"], None, "{}", always, |s, p| super::frontend(
+            s,
+            "help.checkUpdates",
+            p
+        )),
     ]
 }

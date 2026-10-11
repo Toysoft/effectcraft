@@ -55,6 +55,8 @@ const EDIT_QUIET: f64 = 0.3;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialog {
     About,
+    /// Help ▸ Check for Updates…
+    CheckUpdates,
     NewComp,
     CompSettings,
     SolidSettings,
@@ -443,6 +445,13 @@ impl EffectcraftApp {
         if r.autosave.is_some() {
             self.recovery = Some(r);
             self.dialog = Some(Dialog::Recovery);
+        }
+    }
+
+    /// Check for updates on startup in the background if enabled.
+    pub fn check_updates_on_startup(&mut self) {
+        if self.session.prefs.general.check_updates_on_startup {
+            self.dialog_state.start_startup_update_check();
         }
     }
 
@@ -1634,6 +1643,7 @@ impl EffectcraftApp {
         }
         panels::precomp::mini_flowchart(self, &ctx);
         panels::home::capture_thumbnail(self);
+        panels::dialogs::poll_startup_update_check(self);
         panels::dialogs::show(self, &ctx);
         panels::scriptui_view::sync_panels(self);
         panels::scriptui_view::show_windows(self, &ctx);

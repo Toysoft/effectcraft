@@ -1,5 +1,4 @@
-//! Modal dialogs: About (community links, Contributors and Models credits), New Composition /
-//! Composition Settings, Solid Settings and the command palette (Camera/Light Settings live in `dialogs_3d`).
+use std::sync::{Arc, Mutex};
 
 use crate::i18n::{tr, tr_args};
 use effectcraft_engine::project::{ItemId, ItemKind, LayerId, LayerSource};
@@ -12,6 +11,15 @@ use crate::theme::Tokens;
 use crate::{Dialog, EffectcraftApp};
 
 pub use super::comp_settings::CompDraft;
+
+/// Status of the GitHub update check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateStatus {
+    Checking,
+    UpToDate(String),
+    Available { current: String, latest: String, url: String },
+    Error(String),
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct DialogState {
@@ -60,6 +68,71 @@ pub struct DialogState {
     pub unsaved: super::unsaved::Pending,
     /// Deleting Project items in use: the deletion waiting on the prompt.
     pub delete_items: super::delete_items::Pending,
+    /// Status of the background update check.
+    pub update_status: Arc<Mutex<Option<UpdateStatus>>>,
+    /// Whether an automatic startup update check is running silently in the background.
+    pub startup_update_checking: bool,
+}
+
+impl DialogState {
+    pub fn start_update_check(&mut self) {
+        let status = Arc::new(Mutex::new(Some(UpdateStatus::Checking)));
+        self.update_status = status.clone();
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        std::thread::spawn(move || {
+            let res = fetch_latest_release();
+            let new_status = match res {
+                Ok((latest_tag, url)) => {
+                    let clean_latest = latest_tag.trim_start_matches('v');
+                    if is_newer_version(clean_latest, &current_version) {
+                        UpdateStatus::Available {
+                            current: current_version,
+                            latest: latest_tag,
+                            url,
+                        }
+                    } else {
+                        UpdateStatus::UpToDate(current_version)
+                    }
+                }
+                Err(e) => UpdateStatus::Error(e),
+            };
+            if let Ok(mut lock) = status.lock() {
+                *lock = Some(new_status);
+            }
+        });
+    }
+
+    pub fn start_startup_update_check(&mut self) {
+        self.startup_update_checking = true;
+        self.start_update_check();
+    }
+}
+
+/// Poll a silent startup update check: if a newer version is available, open the dialog.
+pub fn poll_startup_update_check(app: &mut EffectcraftApp) {
+    if !app.dialog_state.startup_update_checking {
+        return;
+    }
+    let status_opt = app
+        .dialog_state
+        .update_status
+        .lock()
+        .ok()
+        .and_then(|s| s.clone());
+    if let Some(status) = status_opt {
+        match status {
+            UpdateStatus::Checking => {}
+            UpdateStatus::Available { .. } => {
+                app.dialog_state.startup_update_checking = false;
+                if app.dialog.is_none() {
+                    app.dialog = Some(Dialog::CheckUpdates);
+                }
+            }
+            UpdateStatus::UpToDate(_) | UpdateStatus::Error(_) => {
+                app.dialog_state.startup_update_checking = false;
+            }
+        }
+    }
 }
 
 pub fn open_new_comp(app: &mut EffectcraftApp) {
@@ -170,6 +243,7 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context) {
     let t = app.tokens;
     match d {
         Dialog::About => about(app, ctx, &t),
+        Dialog::CheckUpdates => check_updates(app, ctx, &t),
         Dialog::NewComp | Dialog::CompSettings => comp_settings(app, ctx, &t, d == Dialog::CompSettings),
         Dialog::SolidSettings => solid(app, ctx, &t),
         Dialog::CommandPalette => palette(app, ctx, &t),
@@ -306,6 +380,121 @@ fn about_main(app: &mut EffectcraftApp, ui: &mut egui::Ui, t: &Tokens, cmd: &mut
         }
         ui.add_space(4.0);
     }
+}
+
+pub fn check_updates(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
+    let mut close = false;
+    let mut open_url = None;
+    let status = app
+        .dialog_state
+        .update_status
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .unwrap_or(UpdateStatus::Checking);
+
+    modal(ctx, "Check for Updates", vec2(460.0, 180.0), t, |ui| {
+        ui.add_space(8.0);
+        match status {
+            UpdateStatus::Checking => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.add_space(8.0);
+                    ui.label(tr("Checking for updates on GitHub..."));
+                });
+            }
+            UpdateStatus::UpToDate(ver) => {
+                ui.label(egui::RichText::new(tr("EffectCraft is up to date.")).strong());
+                ui.add_space(6.0);
+                ui.label(format!("Version {ver} is currently the newest version."));
+            }
+            UpdateStatus::Available { current, latest, url } => {
+                ui.label(egui::RichText::new(tr("A new version of EffectCraft is available!")).color(t.accent).strong());
+                ui.add_space(6.0);
+                ui.label(format!("Current version: {current}\nLatest version: {latest}"));
+                ui.add_space(8.0);
+                if ui.button(tr("View on GitHub")).clicked() {
+                    open_url = Some(url);
+                    close = true;
+                }
+            }
+            UpdateStatus::Error(err) => {
+                ui.label(egui::RichText::new(tr("Could not check for updates")).color(Color32::from_rgb(230, 80, 80)));
+                ui.add_space(6.0);
+                ui.label(err);
+                ui.add_space(8.0);
+                if ui.button(tr("Open GitHub Releases")).clicked() {
+                    open_url = Some("https://github.com/storytold/effectcraft/releases".to_string());
+                    close = true;
+                }
+            }
+        }
+        ui.add_space(16.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let r = ui.add(egui::Button::new(egui::RichText::new(tr("Close")).color(Color32::WHITE)).fill(t.accent));
+            app.auto.add("updates.close", r.rect, "Close");
+            if r.clicked() {
+                close = true;
+            }
+        });
+    });
+
+    if let Some(url) = open_url {
+        ctx.open_url(egui::OpenUrl::new_tab(url));
+    }
+    if close {
+        app.dialog = None;
+    }
+}
+
+fn fetch_latest_release() -> Result<(String, String), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let output = std::process::Command::new("curl")
+            .args(["-s", "-H", "User-Agent: EffectCraft", "https://api.github.com/repos/storytold/effectcraft/releases/latest"])
+            .output()
+            .map_err(|e| format!("Failed to run curl: {e}"))?;
+
+        if !output.status.success() {
+            return Err("GitHub releases API request failed".to_string());
+        }
+
+        let json: Value = serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("Failed to parse release response: {e}"))?;
+
+        let tag = json
+            .get("tag_name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                if let Some(msg) = json.get("message").and_then(Value::as_str) {
+                    format!("GitHub API: {msg}")
+                } else {
+                    "No release found".to_string()
+                }
+            })?
+            .to_string();
+
+        let url = json
+            .get("html_url")
+            .and_then(Value::as_str)
+            .unwrap_or("https://github.com/storytold/effectcraft/releases")
+            .to_string();
+
+        Ok((tag, url))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Err("Update check is not supported in the web browser version".to_string())
+    }
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.split('.')
+            .filter_map(|s| s.split('-').next().and_then(|p| p.parse().ok()))
+            .collect()
+    };
+    parse(latest) > parse(current)
 }
 
 fn comp_settings(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens, existing: bool) {
