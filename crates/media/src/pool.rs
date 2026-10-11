@@ -563,6 +563,9 @@ impl Inner {
         if let Some(b) = lock(&self.files).get(path) {
             return Ok(b.clone());
         }
+        if crate::ext_of(std::path::Path::new(path)) == "arw" {
+            return crate::raw::read_file(std::path::Path::new(path)).map(Into::into);
+        }
         std::fs::read(path).map(Into::into).map_err(|e| MediaError::Io(format!("{path}: {e}")))
     }
 
@@ -728,6 +731,9 @@ impl Inner {
             None if &**path == PLACEHOLDER => Ok(colour_bars(footage.width, footage.height)),
             None => {
                 let bytes = self.read(path)?;
+                if crate::raw::recognizes(path, &bytes) {
+                    return crate::raw::decode(path, &bytes, op);
+                }
                 if let Some(img) = crate::layered::decode(path, &bytes, footage, op)? {
                     return Ok(img);
                 }

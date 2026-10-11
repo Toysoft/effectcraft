@@ -197,7 +197,8 @@ mod tests {
             eprintln!("no variable font installed: skipped");
             return;
         };
-        // An axis that changes widths (wdth or wght, else the first that moves).
+        // Weight axes may preserve advance widths (for example in Windows' Bahnschrift).
+        // Check shaping against the face's actual metrics at both axis endpoints.
         let a = axes.iter().find(|a| a.tag == "wdth" && a.max > a.min).or_else(|| axes.iter().find(|a| a.tag == "wght" && a.max > a.min)).unwrap_or(&axes[0]);
         let info = crate::fonts::face(face).info.clone();
         let st = |v: f32| crate::TextStyle {
@@ -207,12 +208,18 @@ mod tests {
             variations: vec![(a.tag.clone(), v)],
             ..Default::default()
         };
-        let (lo, hi) = (crate::layout::measure("Hamburgefonts", &st(a.min)), crate::layout::measure("Hamburgefonts", &st(a.max)));
         if crate::resolve(&info.family, &info.style).face != face {
             eprintln!("variable face not reachable by family/style: skipped");
             return;
         }
-        assert!((lo - hi).abs() > 1.0, "{} {}..{}: advances {lo} vs {hi}", a.tag, a.min, a.max);
+        let f = fonts::face(face);
+        let gid = f.glyph('H').unwrap();
+        for v in [a.min, a.max] {
+            let style = st(v);
+            let expected = advance_units_at(face, gid, &style.variations).unwrap() * style.size / f.units_per_em();
+            let measured = crate::layout::measure("H", &style);
+            assert!((measured - expected).abs() < 0.1, "{} {}: advance {measured} vs metric {expected}", a.tag, v);
+        }
         let ink = |v: f32| {
             let l = crate::layout::layout("H", &st(v), &crate::ParagraphStyle::default());
             l.glyphs.iter().map(|g| crate::glyph_outline(g).area().abs()).sum::<f64>()

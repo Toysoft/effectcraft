@@ -36,6 +36,10 @@ impl AlphaOp {
     fn float(self, v: f32) -> f32 {
         if self.preserve_rgb { v } else { encode(v) }
     }
+    /// Scene-linear, opaque RGB (camera RAW), with the usual float-footage interpretation.
+    pub(crate) fn linear_opaque(self, c: [f32; 3]) -> Px {
+        self.apply(c.map(|v| self.float(v)), 1.0)
+    }
     /// `c` is the file's colour (straight or premultiplied as the mode says), `a` its alpha.
     #[inline(always)]
     fn apply(self, c: [f32; 3], a: f32) -> Px {
