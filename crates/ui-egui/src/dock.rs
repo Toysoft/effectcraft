@@ -1176,9 +1176,7 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
             // Every tab reserves the room of the active tab's controls (×, lock, panel menu), so a
             // tab keeps its width when it becomes active.
             let menu_w = 20.0;
-            // The lock belongs to the panel: on its shown document's tab only.
-            let lock = e.deco.is_some_and(|d| d.viewer) && (e.doc.is_none() || is_active);
-            // × (active tab only), swatch and lock before the label.
+            // ×, swatch and lock before the label.
             let deco_w = match e.deco {
                 Some(d) if d.viewer => 16.0 + 14.0 + 16.0,
                 Some(_) => 14.0,
@@ -1217,10 +1215,12 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
             if e.shown_doc {
                 reg.add_response(&format!("panel.tab.{}", p.id()), &resp, &e.label);
             }
+            // A viewer tab's × and lock: always on the active tab, on the others only while hovered.
+            let controls = e.deco.is_some_and(|d| d.viewer) && (is_active || ui.rect_contains_pointer(tab));
             let mut label_x = tab.min.x + 4.0;
             if let Some(d) = e.deco {
                 let mut dx = tab.min.x + 3.0;
-                if is_active && d.viewer {
+                if controls {
                     let cr = Rect::from_center_size(pos2(dx + 5.0, text_y), vec2(10.0, 10.0));
                     let cresp = ui.interact(cr.expand(2.0), egui::Id::new(("tab-close", g.path.clone(), k)), Sense::click());
                     let cc = if cresp.hovered() { t.tab_text_active } else { t.tab_text };
@@ -1240,7 +1240,7 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
                 painter.rect_filled(sw, 1.0, d.swatch);
                 dx += 14.0;
                 label_x = dx;
-                if lock {
+                if controls {
                     let lr = Rect::from_center_size(pos2(dx + 6.0, text_y), vec2(12.0, 12.0));
                     let lresp = ui.interact(lr.expand(2.0), egui::Id::new(("tab-lock", g.path.clone(), k)), Sense::click());
                     let lc = if d.locked {
