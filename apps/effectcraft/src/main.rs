@@ -179,6 +179,18 @@ fn main() -> eframe::Result {
                 if plugins.is_dir() {
                     let _ = session.execute("effect.plugins.load", json!({"folder": plugins.to_string_lossy()}));
                 }
+                // External effect helpers (helpers/ next to the app or in the settings folder,
+                // EFFECTCRAFT_HELPER_PATH) add their effects too; EFFECTCRAFT_NO_HELPERS=1 skips them.
+                if session.helpers.is_some() && std::env::var_os("EFFECTCRAFT_NO_HELPERS").is_none_or(|v| v != "1") {
+                    match session.execute("effect.helpers.scan", json!({})) {
+                        Ok(r) => {
+                            for e in r["errors"].as_array().into_iter().flatten() {
+                                log::warn!("effect helpers: {}", e.as_str().unwrap_or("error"));
+                            }
+                        }
+                        Err(e) => log::warn!("effect helpers: {e}"),
+                    }
+                }
                 session.config = Some(std::sync::Arc::new(effectcraft_engine::config::DirConfig::new(dir)));
             }
             session.load_settings();
@@ -385,6 +397,7 @@ impl eframe::App for Desktop {
         self.launch.exited();
         self.window.save(self.app.session.config.as_deref());
         self.app.on_exit();
+        effectcraft_host::stop_helpers();
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {

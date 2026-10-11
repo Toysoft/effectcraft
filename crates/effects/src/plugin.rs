@@ -400,6 +400,30 @@ pub fn plugins() -> Vec<&'static EffectSpec> {
     plugin_specs().read().map(|v| v.clone()).unwrap_or_default()
 }
 
+/// The last render error of each plug-in effect (cleared by its next good render), so the UI can
+/// show it on the effect.
+fn render_errors() -> &'static RwLock<std::collections::HashMap<String, String>> {
+    static E: OnceLock<RwLock<std::collections::HashMap<String, String>>> = OnceLock::new();
+    E.get_or_init(Default::default)
+}
+
+/// Why the last render of plug-in effect `id` failed, if it did (the frame was left as it was).
+pub fn plugin_error(id: &str) -> Option<String> {
+    render_errors().read().ok()?.get(id).cloned()
+}
+
+fn set_plugin_error(id: &str, error: Option<String>) {
+    let Ok(mut m) = render_errors().write() else { return };
+    match error {
+        Some(e) => {
+            m.insert(id.to_string(), e);
+        }
+        None => {
+            m.remove(id);
+        }
+    }
+}
+
 /// The plug-in behind a registered effect id.
 pub fn plugin(id: &str) -> Option<Arc<dyn EffectPlugin>> {
     SLOTS.iter().filter_map(|s| s.get()).find(|p| p.manifest().id == id).cloned()
@@ -653,7 +677,11 @@ fn run_slot(slot: usize, ctx: &EffectCtx, mut buf: Buf) -> Buf {
     let mut frame = PluginFrame { width, height, pixels: &mut buf.img.data, scale, origin: offset, layer_size: ctx.layer_size };
     if let Err(e) = plugin.render_v2(&mut frame, &params, ctx.time, &host) {
         log::warn!("plug-in `{}`: {e}", m.id);
+        set_plugin_error(&m.id, Some(e));
         return before;
+    }
+    if plugin_error(&m.id).is_some() {
+        set_plugin_error(&m.id, None);
     }
     buf
 }
