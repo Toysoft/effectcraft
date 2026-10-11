@@ -1266,8 +1266,11 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
                 for dy in [-3.5, 0.0, 3.5] {
                     painter.line_segment([pos2(mr.min.x, mr.center().y + dy), pos2(mr.max.x, mr.center().y + dy)], Stroke::new(1.5, mc));
                 }
-                let uy = strip.min.y + 23.0;
-                painter.line_segment([pos2(label_x, uy), pos2(mr.max.x, uy)], Stroke::new(1.0, t.tab_text_active));
+                // The active tab's underline: near the strip's bottom edge, from the tab's first
+                // decoration (close button, swatch) to its panel menu.
+                let ux = if e.deco.is_some() { tab.min.x + 6.0 } else { label_x };
+                let uy = strip.max.y - 2.5;
+                painter.line_segment([pos2(ux, uy), pos2(mr.max.x, uy)], Stroke::new(1.0, t.tab_text_active));
                 crate::widgets::focus_outline(ui, &mresp, t);
                 if mresp.clicked() {
                     out.actions.push(DockAction::PanelMenu(*p, mr.left_bottom()));
