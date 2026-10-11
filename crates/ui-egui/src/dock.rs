@@ -1173,12 +1173,14 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
             // A collapsed stacked panel's header is plain text (no underline or panel menu).
             let is_active = k == ai && g.stacked != Some(false);
             let galley = painter.layout_no_wrap(e.label.clone(), Tokens::ui(12.0), if is_active { t.tab_text_active } else { t.tab_text });
-            let menu_w = if is_active { 20.0 } else { 0.0 };
+            // Every tab reserves the room of the active tab's controls (×, lock, panel menu), so a
+            // tab keeps its width when it becomes active.
+            let menu_w = 20.0;
             // The lock belongs to the panel: on its shown document's tab only.
             let lock = e.deco.is_some_and(|d| d.viewer) && (e.doc.is_none() || is_active);
             // × (active tab only), swatch and lock before the label.
             let deco_w = match e.deco {
-                Some(d) if d.viewer => (if is_active { 16.0 } else { 0.0 }) + 14.0 + if lock { 16.0 } else { 0.0 },
+                Some(d) if d.viewer => 16.0 + 14.0 + 16.0,
                 Some(_) => 14.0,
                 None => 0.0,
             };
@@ -1230,6 +1232,8 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
                     if cresp.clicked() {
                         out.actions.push(close(e));
                     }
+                }
+                if d.viewer {
                     dx += 16.0;
                 }
                 let sw = Rect::from_center_size(pos2(dx + 5.0, text_y), vec2(9.0, 9.0));
@@ -1252,6 +1256,8 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
                     if lresp.clicked() {
                         out.actions.push(DockAction::ToggleLock(*p));
                     }
+                }
+                if d.viewer {
                     label_x = dx + 16.0;
                 }
             }
