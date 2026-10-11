@@ -328,11 +328,30 @@ fn evaluate_in_time(script: &Script, ctx: &mut Context) -> Option<JsResult<JsVal
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test hook: this thread's time budget (tests of the run-count budget lift it so that a
+    /// loaded machine cannot reach the clock first).
+    pub static TIME_LIMIT: std::cell::Cell<std::time::Duration> = const { std::cell::Cell::new(crate::MAX_TIME) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn max_time() -> std::time::Duration {
+    #[cfg(test)]
+    {
+        TIME_LIMIT.with(|t| t.get())
+    }
+    #[cfg(not(test))]
+    {
+        crate::MAX_TIME
+    }
+}
+
 /// Whether the outermost evaluation on this thread has used up [`crate::MAX_TIME`].
 pub fn out_of_time() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        STARTED.with(|s| s.get()).is_some_and(|t| t.elapsed() > crate::MAX_TIME)
+        STARTED.with(|s| s.get()).is_some_and(|t| t.elapsed() > max_time())
     }
     #[cfg(target_arch = "wasm32")]
     {

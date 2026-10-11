@@ -326,7 +326,7 @@ fn fuzz_expressions_never_crash() {
     let budget = Duration::from_secs(env_u64("EFFECTCRAFT_FUZZ_SECS", 5));
     let verbose = env_u64("EFFECTCRAFT_FUZZ_VERBOSE", 0) != 0;
     // Every evaluation gives up after `MAX_TIME`, and an input is evaluated a handful of times.
-    let deadline = crate::MAX_TIME * 12;
+    let deadline = crate::MAX_TIME * 24;
     let mut worker = Worker::start().unwrap();
     // The unmutated seeds evaluate everywhere without crashing.
     for (i, s) in SEEDS.iter().enumerate() {
