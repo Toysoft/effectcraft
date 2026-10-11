@@ -1890,7 +1890,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         _ => start_rename(&ctx, layer.id.0, &layer.name),
                     }
                 }
-                layer_context_menu(&row_resp, layer, &mut actions);
+                layer_context_menu(&row_resp, &comp, layer, &selected, &mut actions);
                 // Switches.
                 let sws: [(Icon, bool, &str, bool); 8] = [
                     (Icon::Shy, sw.shy, "shy", true),
@@ -2104,7 +2104,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                             set_anchor(&ctx, cid, layer.id);
                         }
                     }
-                    layer_context_menu(&body, layer, &mut actions);
+                    layer_context_menu(&body, &comp, layer, &selected, &mut actions);
                     let drag_key = format!("bar-{}", layer.id.0);
                     for (resp, kind) in [(&body, "move"), (&lin, "in"), (&lout, "out")] {
                         if resp.dragged() {
@@ -3469,8 +3469,16 @@ fn prop_menu(
     item(ui, "essentialGraphics", "Add Property to Essential Graphics", false, "essential.addProperty", json!({"comp": comp.0, "layer": l, "prop": uid}));
 }
 
-fn layer_context_menu(resp: &egui::Response, layer: &Layer, actions: &mut Vec<(String, serde_json::Value)>) {
-    resp.context_menu(|ui| layer_menu(ui, &[layer.id.0], actions));
+/// A layer row's or bar's context menu. As in After Effects, right-clicking a layer that is part
+/// of the selection keeps the selection and the menu acts on all of it; right-clicking an
+/// unselected layer selects only that layer.
+fn layer_context_menu(resp: &egui::Response, comp: &Comp, layer: &Layer, selected: &[LayerId], actions: &mut Vec<(String, serde_json::Value)>) {
+    let in_selection = selected.contains(&layer.id);
+    if resp.secondary_clicked() && !in_selection && !layer.switches.locked {
+        actions.push(("layer.select".into(), json!({"layers": [layer.id.0]})));
+    }
+    let targets: Vec<u64> = if in_selection { comp.layers.iter().filter(|l| selected.contains(&l.id)).map(|l| l.id.0).collect() } else { vec![layer.id.0] };
+    resp.context_menu(|ui| layer_menu(ui, &targets, actions));
 }
 
 /// Shared layer actions for Timeline rows and Composition context menus.

@@ -795,7 +795,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 ui.close();
             }
             if it.parent.is_some() && ui.button(crate::i18n::tr("Move to Project Root")).clicked() {
-                actions.push(("project.move".into(), json!({"items": [id.0], "folder": null})));
+                actions.push(("project.move".into(), json!({"items": targets(app, *id, selected), "folder": null})));
                 ui.close();
             }
             if !it.is_folder() && ui.button(crate::i18n::tr("Add to Composition")).clicked() {
