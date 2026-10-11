@@ -147,6 +147,13 @@ impl Services for WebServices {
     fn is_dir(&self, _path: &str) -> bool {
         false
     }
+    fn exists(&self, path: &str) -> bool {
+        get(path).is_some()
+    }
+    /// Console Effect snapshots deleted from its gallery.
+    fn remove_file(&self, path: &str) -> std::io::Result<()> {
+        if STORE.remove_file(path) { Ok(()) } else { Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("{path}: no such file"))) }
+    }
 }
 
 /// Media import from the table (the bytes are also handed to the media pool, which decodes them).

@@ -30,6 +30,7 @@ feel and platform differences, and the 26.x interface changes are not in yet.
 | Preview feel | Spacebar / Numpad 0 previews, RAM preview, cache bars, adaptive resolution | 55% | `ui_ram_preview`, `ui_live_preview`; stutter (#595, #304), scrubbing lag (#329), Shift+Space default (#551) |
 | Home screen, Learn, templates | Home with recent projects, template gallery, interactive Learn tutorials | 70% | Layout nitpicks (#581); Home literals untranslated (#574) |
 | Quick Apply (26.2) | Search to apply effects, presets or commands | partial | A command palette exists; not After Effects' Quick Apply |
+| Console Effect (Ctrl+Space) | Keyboard launcher for effects and presets with favorites, aliases, overrides, blacklist, nine shortcuts, snapshots and a gallery ([console-effect.md](console-effect.md)) | beyond | Native here; After Effects has no built-in equivalent; `ui_console_effect` tests |
 | Accessibility | AccessKit enabled; focus labels tested | 20% | No screen-reader pass, keyboard-navigation audit or contrast check |
 | UI scale | Settings ▸ Appearance ▸ UI Scale 75–200% | beyond | After Effects follows the system's scaling (#284) |
 

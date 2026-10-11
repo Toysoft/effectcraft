@@ -24,13 +24,10 @@ pub struct PresetFile {
     pub path: String,
 }
 
-/// Where user presets live: `$EC_PRESETS_DIR`, else `~/Documents/EffectCraft/Presets`.
+/// Where user presets live: `$EC_PRESETS_DIR`, else `~/Documents/EffectCraft/Presets` (Console Effect
+/// lists the same folder).
 pub fn presets_dir() -> Option<std::path::PathBuf> {
-    if let Ok(d) = std::env::var("EC_PRESETS_DIR") {
-        return Some(d.into());
-    }
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()?;
-    Some(std::path::Path::new(&home).join("Documents").join("EffectCraft").join("Presets"))
+    effectcraft_engine::console_effect::presets_dir()
 }
 
 /// The `.ecpreset` files in `dir`, sorted by name.
