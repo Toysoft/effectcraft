@@ -59,6 +59,19 @@ pub(crate) fn tr(text: &str) -> &str {
     catalog(current()).and_then(|c| c.get(text)).copied().unwrap_or(text)
 }
 
+/// All available translations for `text` across all catalogs.
+pub(crate) fn all_translations(text: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for lang in ["ja", "zh-hans", "zh-hant", "uk"] {
+        if let Some(cat) = catalog(lang) {
+            if let Some(t) = cat.get(text) {
+                out.push(*t);
+            }
+        }
+    }
+    out
+}
+
 /// Translate an interface string that carries values: each `{}` takes the next argument. A missing
 /// argument leaves its placeholder out and extra ones are ignored, so this cannot panic; the tests
 /// keep the placeholder count equal to the English source's.

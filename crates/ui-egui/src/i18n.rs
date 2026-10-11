@@ -8,7 +8,7 @@ use crate::EffectcraftApp;
 /// Translations for the panels, tooltips and dialogs below the menu bar (see the module docs).
 mod ui;
 use effectcraft_engine::menus::MenuEntry;
-pub(crate) use ui::{set_current, tr, tr_args};
+pub(crate) use ui::{all_translations, set_current, tr, tr_args};
 
 /// Every language with a catalog, in the order Settings ▸ General ▸ Language lists them.
 const CATALOG_CODES: [&str; 6] = ["ja", "zh-hans", "zh-hant", "uk", "es", "pt-br"];

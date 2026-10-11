@@ -5,7 +5,9 @@
 EffectCraft ▸ Settings (macOS) or Edit ▸ Preferences (Windows/Linux), `Cmd+Alt+;`. The dialog has
 After Effects 2026's pages (General, Startup & Repair, Project, Composition, Previews, Appearance,
 Grids & Guides, Labels, Type, Import, Export, Audio, Disk, Memory & CPU, Video, 3D, Scripting &
-Expressions) with OK, Cancel, Previous and Next. Older page names still open the right page
+Expressions) with OK, Cancel, Previous and Next. A sticky search field at the top of the category
+list dynamically searches settings across all pages with ranked results (exact prefix, word boundaries,
+substrings, English labels, translations and descriptions) in a dedicated result view. Older page names still open the right page
 (`prefs.open {"page": "Auto-Save"}` opens Project, `Media & Disk Cache` opens Disk, `Memory &
 Performance` opens Memory & CPU).
 
