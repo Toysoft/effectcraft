@@ -460,8 +460,8 @@ impl MediaPool {
     }
 
     /// `frames` stereo sample frames of `footage`'s audio starting at source time `start`, at
-    /// `rate` Hz, interleaved (L R L R …). Mono is duplicated to both channels; channels beyond
-    /// the first two are dropped. Silence where there is no audio (or before the media starts).
+    /// `rate` Hz, interleaved (L R L R …). Mono is duplicated to both channels; multichannel
+    /// sources are downmixed to stereo ([`crate::downmix`]). Silence where there is no audio (or before the media starts).
     /// With a conformed audio folder, reads come from the conformed file once it is written.
     pub fn audio_samples(&self, footage: &Footage, start: Tick, frames: usize, rate: u32) -> Vec<f32> {
         if !footage.has_audio || footage.missing || rate == 0 || frames == 0 {
@@ -891,7 +891,7 @@ impl FootageSource for MediaPool {
 
 /// `frames` stereo sample frames (interleaved) of `src` from sample `s0` at `rate` Hz, which
 /// FilmCraft serves as decoded when it is the source's own rate. Mono is duplicated to both
-/// channels; silence before the start. An error where decoding fails.
+/// channels, multichannel sources are downmixed ([`crate::downmix`]); silence before the start. An error where decoding fails.
 fn read_stereo(src: &SharedSource, s0: i64, frames: usize, rate: u32) -> std::result::Result<Vec<f32>, String> {
     let mut out = vec![0.0; frames * 2];
     let skip = usize::try_from(s0.saturating_neg()).unwrap_or(0);
@@ -899,12 +899,9 @@ fn read_stereo(src: &SharedSource, s0: i64, frames: usize, rate: u32) -> std::re
         return Ok(out);
     }
     let buf = src.audio(s0.max(0), frames - skip, rate).map_err(|e| e.to_string())?;
-    let (Some(l), Some(r)) = (buf.channels.first(), buf.channels.get(1).or(buf.channels.first())) else { return Ok(out) };
     let Some(dst) = skip.checked_mul(2).and_then(|i| out.get_mut(i..)) else { return Ok(out) };
-    for ([o0, o1], (a, b)) in dst.as_chunks_mut::<2>().0.iter_mut().zip(l.iter().zip(r)) {
-        *o0 = *a;
-        *o1 = *b;
-    }
+    let aac = src.info().audio.as_ref().is_some_and(|a| a.codec.starts_with("AAC"));
+    crate::downmix::downmix_into(&buf.channels, aac, dst);
     Ok(out)
 }
 

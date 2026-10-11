@@ -17,6 +17,7 @@
 
 mod convert;
 mod dpx;
+pub mod downmix;
 pub mod exr_channels;
 mod gif_anim;
 mod layered;

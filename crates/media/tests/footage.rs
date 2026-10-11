@@ -778,9 +778,14 @@ fn flac_audio_of_any_shape_reads_in_device_blocks() {
             }
             at += 1024;
         }
-        // ffmpeg's sine source has an amplitude of 1/8, on both channels (mono is duplicated).
+        // ffmpeg's sine source has an amplitude of 1/8 (mono is duplicated). The fixture carries
+        // channels 0 and 1 at full level and the others at half, so a multichannel file sounds as
+        // its stereo downmix (tests/downmix.rs checks that matrix channel by channel).
+        let gains = effectcraft_media::downmix::stereo_gains(channels as usize, false);
+        let side = |s: usize| gains.iter().enumerate().map(|(c, g)| f64::from(g[s]) * if c < 2 { 1.0 } else { 0.5 }).sum::<f64>();
+        let want = 0.125 * ((side(0).powi(2) + side(1).powi(2)) / 2.0).sqrt() / 2f64.sqrt();
         let rms = (sum / n.max(1) as f64).sqrt();
-        assert!((rms - 0.125 / 2f64.sqrt()).abs() < 0.003, "{}: rms {rms}", p.display());
+        assert!((rms - want).abs() < 0.003, "{}: rms {rms}, expected {want}", p.display());
         eprintln!("{}: read {secs} s in {:?}, slowest block after the first {worst:?}", p.display(), t0.elapsed());
         assert_eq!(pool.stats().opened, 1, "opened once, not per block");
     }
