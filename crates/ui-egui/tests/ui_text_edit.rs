@@ -277,3 +277,33 @@ fn type_tool_drag_makes_paragraph_text_with_box_handles() {
     assert!(doc2.box_size.unwrap()[0] > bs[0] + 20.0, "{:?}", doc2.box_size);
     assert!(h.state().session.state.text_edit.is_some(), "still editing after resizing");
 }
+
+/// #866: Layer ▸ New ▸ Text (menu or its shortcut) puts an insertion point in the comp, as After
+/// Effects does, so typed keys reach Source Text (and the layer name follows) instead of running
+/// shortcuts while the layer keeps the placeholder "Text".
+#[test]
+fn layer_new_text_menu_and_shortcut_start_typing_into_source_text() {
+    for via_shortcut in [false, true] {
+        let mut s = Session::default();
+        s.execute("comp.new", json!({"name": "Type", "width": 640, "height": 360, "duration": 2})).unwrap();
+        s.execute("layer.newSolid", json!({"color": "#ffffff"})).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_| EffectcraftApp::new(s));
+        h.state_mut().show_panel(PanelKind::Composition);
+        h.run_steps(3);
+        if via_shortcut {
+            key(&mut h, Key::T, Modifiers::COMMAND | Modifiers::ALT | Modifiers::SHIFT);
+        } else {
+            let ctx = h.ctx.clone();
+            effectcraft_ui_egui::menus::invoke(h.state_mut(), &ctx, "layer.newText", json!({})).unwrap();
+            h.run_steps(2);
+        }
+        let (lid, text, _, _) = edited(&h);
+        assert_eq!(text, "", "no placeholder to type over (shortcut: {via_shortcut})");
+        type_text(&mut h, "My First Project");
+        key(&mut h, Key::Escape, Modifiers::NONE);
+        assert!(h.state().session.state.text_edit.is_none(), "Escape commits");
+        let s = &h.state().session;
+        assert_eq!(layer_doc(s, LayerId(lid)).unwrap().text, "My First Project", "typed text is the Source Text");
+        assert_eq!(s.active_comp().unwrap().layer(LayerId(lid)).unwrap().name, "My First Project", "the name follows the text");
+    }
+}

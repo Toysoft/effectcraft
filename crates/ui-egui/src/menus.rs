@@ -274,6 +274,12 @@ fn no_params(p: &Value) -> bool {
 
 /// Execute a UI or engine command by id.
 pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    // Layer ▸ New ▸ Text (menu, shortcut, context menus) puts an insertion point in the centre of
+    // the comp, as After Effects does, so typing goes into Source Text rather than running
+    // shortcuts (#866). `engine.execute` keeps the headless default.
+    if id == "layer.newText" && no_params(&params) {
+        return run_engine(app, ctx, id, json!({"text": "", "edit": true}));
+    }
     if no_params(&params) && app.ui.focused == PanelKind::Project {
         match id {
             "edit.duplicate" => return run_engine(app, ctx, "project.duplicate", json!({})),

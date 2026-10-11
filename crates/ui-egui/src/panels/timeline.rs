@@ -2672,7 +2672,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         response.context_menu(|ui| {
             let menu = ui.menu_button(crate::i18n::tr("New"), |ui| {
                 for (key, label, command, params) in [
-                    ("text", "Text", "layer.newText", json!({"text": "Text"})),
+                    ("text", "Text", "layer.newText", json!({})),
                     ("solid", "Solid…", "layer.newSolid", json!({})),
                     ("light", "Light…", "layer.newLight", json!({})),
                     ("camera", "Camera…", "layer.newCamera", json!({})),
@@ -3473,7 +3473,7 @@ pub(crate) fn layer_menu(ui: &mut egui::Ui, layers: &[u64], actions: &mut Vec<(S
         }
     };
     ui.menu_button(crate::i18n::tr("New"), |ui| {
-        item(ui, "Text", "layer.newText", json!({"text": "Text"}));
+        item(ui, "Text", "layer.newText", json!({}));
         item(ui, "Solid…", "app.solidSettings", json!({}));
         item(ui, "Light…", "layer.newLight", json!({}));
         item(ui, "Camera…", "layer.newCamera", json!({}));
