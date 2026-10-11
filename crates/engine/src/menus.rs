@@ -592,6 +592,8 @@ Edit
     @dynamic:history
   ---
   Quick Apply... | app.commandPalette
+  [mac] FX Console... | app.fxConsole | Ctrl+Space
+  [!mac] FX Console... | app.fxConsole | Cmd+Space
   ---
   Cut | edit.cut
   Copy | edit.copy
@@ -1172,6 +1174,8 @@ Window
   Content-Aware Fill | window.panel {"panel":"contentAwareFill"}
   Effects & Presets | window.panel {"panel":"effectsPresets"} | Cmd+5
   Essential Graphics | window.panel {"panel":"essentialGraphics"}
+  FX Console | window.panel {"panel":"fxConsole"}
+  FX Console Gallery | fxConsole.openGallery
   Info | window.panel {"panel":"info"} | Cmd+2
   Learn | help.inAppTutorials
   Lumetri Scopes | window.panel {"panel":"lumetriScopes"}

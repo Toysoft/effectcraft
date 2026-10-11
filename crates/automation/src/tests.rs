@@ -1245,6 +1245,17 @@ fn automation_roots_confine_file_access() {
         denied(&mut s, "save_project", json!({"path": p(&write.join("link"), "escaped.ecproj")}));
         assert!(!outside.join("escaped.ecproj").exists());
     }
+    // FX Console: settings files and saved frames inside the roots only; what reaches files its
+    // settings name (shortcut and override presets, the gallery) is refused.
+    call_json(&mut s, "execute_command", json!({"command": "fxConsole.exportSettings", "params": {"path": p(&write, "fx.json")}}));
+    denied(&mut s, "execute_command", json!({"command": "fxConsole.exportSettings", "params": {"path": p(&outside, "fx.json")}}));
+    denied(&mut s, "execute_command", json!({"command": "fxConsole.importSettings", "params": {"path": p(&outside, "fx.json")}}));
+    denied(&mut s, "execute_command", json!({"command": "fxConsole.saveFrame", "params": {"path": p(&outside, "f.png")}}));
+    denied(&mut s, "execute_command", json!({"command": "fxConsole.override", "params": {"effect": "Levels", "overridePreset": p(&outside, "x.ecpreset")}}));
+    denied(&mut s, "execute_command", json!({"command": "fxConsole.setSettings", "params": {"galleryFolder": p(&read, "gallery")}}));
+    for id in ["fxConsole.apply", "fxConsole.snapshot", "fxConsole.revealGallery"] {
+        denied(&mut s, "execute_command", json!({"command": id, "params": {}}));
+    }
     // Scripts can read and write anything: refused.
     denied(&mut s, "run_script", json!({"code": "1 + 1"}));
     denied(&mut s, "execute_command", json!({"command": "file.runScript", "params": {"path": p(&read, "x.jsx")}}));

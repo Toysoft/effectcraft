@@ -811,6 +811,20 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             crate::panels::shortcut_editor::open(app);
             Value::Null
         }
+        "app.fxConsole" => {
+            crate::panels::fx_console::open(app, ctx, p.get("query").and_then(Value::as_str).unwrap_or_default());
+            Value::Null
+        }
+        "fxConsole.openGallery" => {
+            app.fx_gallery.open = true;
+            app.fx_gallery.dirty = true;
+            Value::Null
+        }
+        "fxConsole.openSettings" => {
+            crate::panels::fx_console::open_settings_page(app, &p);
+            Value::Null
+        }
+        "fxConsole.copyFrame" => crate::panels::fx_console::copy_frame(app, ctx, p.get("alpha").and_then(Value::as_bool))?,
         "app.templates" => {
             let kind = p.get("kind").and_then(Value::as_str).unwrap_or("renderSettings");
             crate::panels::rq_templates::open(app, ctx, kind);
@@ -1196,6 +1210,12 @@ fn file_dialog(app: &mut EffectcraftApp, id: &str, params: &Value) -> Option<Res
         "comp.saveFrameAsExr" => ("path", Ask::Save("Frame.exr")),
         "file.watchFolder" if params.get("stop").is_none() => ("folder", Ask::Save("Watch Folder")),
         "anim.savePreset" => ("path", Ask::Save("Preset.ecpreset")),
+        "fxConsole.saveFrame" if params.get("format").and_then(Value::as_str) == Some("jpg") => ("path", Ask::Save("Frame.jpg")),
+        "fxConsole.saveFrame" => ("path", Ask::Save("Frame.png")),
+        "fxConsole.exportSettings" => ("path", Ask::Save("FX Console Settings.json")),
+        "fxConsole.importSettings" => ("path", Ask::Open(&["json"])),
+        "fxConsole.exportSnapshots" => ("folder", Ask::Folder),
+        "fxConsole.override" if params.get("overridePreset").is_none() => ("overridePreset", Ask::Open(&["ecpreset"])),
         "anim.applyPreset" => ("path", Ask::Open(&["ecpreset", "json"])),
         "view.exportGuides" => ("path", Ask::Save("Guides.json")),
         "view.importGuides" => ("path", Ask::Open(&["json"])),

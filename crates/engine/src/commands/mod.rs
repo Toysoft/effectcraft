@@ -24,6 +24,7 @@ mod focus;
 pub mod footage_panel;
 pub(crate) mod frame_export;
 mod frontend;
+mod fx_console;
 mod help;
 mod key_labels;
 mod key_transform;
@@ -180,6 +181,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(path_nulls::specs());
         v.extend(vr_editor::specs());
         v.extend(frontend::specs());
+        v.extend(fx_console::specs());
         v.extend(track::specs());
         v.extend(mask_interp::specs());
         v.extend(warp_cmds::specs());

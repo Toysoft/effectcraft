@@ -17,6 +17,7 @@ pub mod config;
 pub mod demo;
 pub mod footage_check;
 pub mod footage_reload;
+pub mod fx_console;
 pub mod guard;
 pub mod history;
 pub mod jobs;
@@ -130,6 +131,10 @@ pub trait Services: Send + Sync {
     /// Whether `path` is a folder (dropped or picked folders import their files).
     fn is_dir(&self, path: &str) -> bool {
         std::path::Path::new(path).is_dir()
+    }
+    /// Delete a file the app made for itself (an FX Console snapshot).
+    fn remove_file(&self, path: &str) -> std::io::Result<()> {
+        std::fs::remove_file(path)
     }
 }
 
@@ -423,6 +428,11 @@ pub struct Session {
     /// Scripts' `app.settings`, kept in the settings store (see
     /// [`commands::scripts::SCRIPT_SETTINGS_FILE`]).
     pub script_settings: commands::scripts::ScriptSettings,
+    /// FX Console's favorites, aliases, overrides, blacklist, shortcuts and options, kept in the
+    /// settings store ([`fx_console::SETTINGS_FILE`]).
+    pub fx_console: fx_console::Settings,
+    /// Bumped whenever [`Session::fx_console`] changes (frontends refresh their results).
+    pub fx_console_revision: u64,
     /// Frontend-only commands offered for binding.
     pub ui_commands: Vec<shortcuts::UiCommand>,
     /// Cache of the resolved active preset (read it with [`Session::shortcuts`]).
@@ -551,6 +561,8 @@ impl Default for Session {
             config: None,
             keymaps: shortcuts::Keymaps::default(),
             script_settings: Default::default(),
+            fx_console: Default::default(),
+            fx_console_revision: 0,
             ui_commands: vec![],
             shortcut_table: std::sync::OnceLock::new(),
             autosave: autosave::AutoSaveState::default(),
