@@ -892,13 +892,9 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             r
         }
         "view.zoomIn" | "view.zoomOut" => {
+            let ppp = ctx.pixels_per_point();
             let cur = v.zoom.unwrap_or_else(|| crate::panels::viewer::last_fit(ctx));
-            const STEPS: [f32; 16] = [0.015, 0.03, 0.0625, 0.125, 0.25, 0.333, 0.5, 0.66, 1.0, 1.5, 2.0, 3.0, 4.0, 8.0, 16.0, 32.0];
-            let next = if id == "view.zoomIn" {
-                STEPS.iter().copied().find(|s| *s > cur + 1e-3).unwrap_or(32.0)
-            } else {
-                STEPS.iter().rev().copied().find(|s| *s < cur - 1e-3).unwrap_or(0.015)
-            };
+            let next = zoom_step(cur, ppp, id == "view.zoomIn");
             v.zoom = Some(next);
             json!({"zoom": next})
         }
@@ -1978,9 +1974,37 @@ fn menu_entry(app: &EffectcraftApp, ui: &mut egui::Ui, e: &MenuEntry) -> egui::R
     ui.add_enabled(enabled, b)
 }
 
+/// View ▸ Zoom In / Zoom Out: the next standard magnification (as a share of screen pixels, so
+/// 100 % is one comp pixel per screen pixel at any display scaling) above or below `cur`, which is
+/// in points per comp pixel like the result (#882).
+fn zoom_step(cur: f32, ppp: f32, zoom_in: bool) -> f32 {
+    const STEPS: [f32; 16] = [0.015, 0.03, 0.0625, 0.125, 0.25, 0.333, 0.5, 0.66, 1.0, 1.5, 2.0, 3.0, 4.0, 8.0, 16.0, 32.0];
+    let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
+    let shown = cur * ppp;
+    let next = if zoom_in {
+        STEPS.iter().copied().find(|s| *s > shown + 1e-3).unwrap_or(32.0)
+    } else {
+        STEPS.iter().rev().copied().find(|s| *s < shown - 1e-3).unwrap_or(0.015)
+    };
+    next / ppp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #882: at 125 % / 150 % display scaling Zoom In reaches 100 % (one comp pixel per screen
+    /// pixel), not 100 % in points (125 % / 150 % on screen).
+    #[test]
+    fn zoom_steps_land_on_whole_screen_magnifications() {
+        for ppp in [1.0f32, 1.25, 1.5, 2.0] {
+            let at_100 = zoom_step(0.7 / ppp, ppp, true);
+            assert!((at_100 * ppp - 1.0).abs() < 1e-6, "ppp {ppp}: {}", at_100 * ppp);
+            assert!((zoom_step(at_100, ppp, true) * ppp - 1.5).abs() < 1e-6);
+            assert!((zoom_step(at_100, ppp, false) * ppp - 0.66).abs() < 1e-6);
+        }
+        assert!(zoom_step(1.0, 0.0, true).is_finite());
+    }
 
     #[test]
     fn shortcut_passes_share_frame_start_modifiers() {

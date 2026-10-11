@@ -748,7 +748,10 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("viewer-fit"), fit));
     let zoom = app.ui.viewer.zoom.unwrap_or(fit);
     let center = area.center() + vec2(app.ui.viewer.pan[0], app.ui.viewer.pan[1]);
-    let origin = center - vec2(cw * zoom / 2.0, ch * zoom / 2.0);
+    // On the physical pixel grid, so at 100 % every comp pixel covers exactly one screen pixel
+    // instead of being blended with its neighbour (#882).
+    let ppp = ctx.pixels_per_point();
+    let origin = snap_to_pixels(center - vec2(cw * zoom / 2.0, ch * zoom / 2.0), ppp);
     let map = ViewerMap { origin, zoom, comp: [cw, ch], area };
     ctx.data_mut(|d| d.insert_temp(map_id(), map));
     let comp_rect = Rect::from_min_size(origin, vec2(cw * zoom, ch * zoom));
@@ -758,7 +761,6 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     app.ui.viewer.extended = extended_region(app, &comp, cid, map);
 
     // Frame.
-    let ppp = ctx.pixels_per_point();
     let scale = app.viewer_scale(zoom, ppp);
     if !app.playback.playing {
         // Queue the frame on screen before any prefetch.
@@ -2384,21 +2386,32 @@ pub(crate) fn styled_line(painter: &egui::Painter, pts: [Pos2; 2], stroke: Strok
     }
 }
 
-/// Texture filtering for Viewer Zoom Quality: More Accurate = bilinear, Faster = nearest.
+/// `p` (points) moved to the nearest physical pixel corner at `ppp` pixels per point.
+pub(crate) fn snap_to_pixels(p: Pos2, ppp: f32) -> Pos2 {
+    if !(ppp.is_finite() && ppp > 0.0 && p.x.is_finite() && p.y.is_finite()) {
+        return p;
+    }
+    pos2((p.x * ppp).round() / ppp, (p.y * ppp).round() / ppp)
+}
+
+/// Texture filtering for Viewer Zoom Quality: More Accurate = bilinear, Faster = nearest. As in
+/// After Effects, a magnified frame (above 100 %, or a lower Resolution) always shows its pixels
+/// as blocks, never smoothed, in either mode (#882).
 pub(crate) fn zoom_texture_options(smooth: bool) -> egui::TextureOptions {
-    if smooth { egui::TextureOptions::LINEAR } else { egui::TextureOptions::NEAREST }
+    if smooth { egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR } } else { egui::TextureOptions::NEAREST }
 }
 
 /// The sampler GPU frames (mipmapped display textures) are drawn with: More Accurate filters
 /// bilinearly within and between mip levels, so a frame shown below 100 % is averaged instead of
-/// skipping pixels (#417); Faster takes the nearest pixel of the full-size frame.
+/// skipping pixels (#417); Faster takes the nearest pixel of the full-size frame. Magnified, both
+/// show the nearest pixel (#882).
 pub(crate) fn zoom_sampler(smooth: bool) -> eframe::wgpu::SamplerDescriptor<'static> {
     use eframe::wgpu::{FilterMode, MipmapFilterMode, SamplerDescriptor};
     let label = Some("viewer frame");
     if smooth {
         SamplerDescriptor {
             label,
-            mag_filter: FilterMode::Linear,
+            mag_filter: FilterMode::Nearest,
             min_filter: FilterMode::Linear,
             mipmap_filter: MipmapFilterMode::Linear,
             ..Default::default()
@@ -2495,6 +2508,35 @@ fn show_frame(app: &mut EffectcraftApp, ctx: &egui::Context, key: crate::frames:
 mod tests {
     use super::*;
     use effectcraft_engine::geom::{Mat4, vec3};
+
+    /// #882: the frame's corner sits on a physical pixel at any display scaling, so 100 % maps
+    /// comp pixels 1:1 onto screen pixels.
+    #[test]
+    fn frame_origin_snaps_to_physical_pixels() {
+        for ppp in [1.0f32, 1.25, 1.5, 1.75, 2.0] {
+            for p in [pos2(-201.12, 72.4), pos2(689.8, 239.75), pos2(0.3, -0.37)] {
+                let s = snap_to_pixels(p, ppp);
+                for v in [s.x * ppp, s.y * ppp] {
+                    assert!((v - v.round()).abs() < 1e-3, "ppp {ppp}: {p:?} → {s:?}");
+                }
+                assert!((s - p).length() <= 0.71 / ppp, "moved by at most half a pixel: {p:?} → {s:?}");
+            }
+        }
+        assert_eq!(snap_to_pixels(pos2(1.3, 2.0), 0.0), pos2(1.3, 2.0));
+    }
+
+    /// #882: a magnified frame shows its pixels as blocks in both Zoom Quality modes; More
+    /// Accurate only smooths when the frame is shown smaller.
+    #[test]
+    fn magnified_frames_are_never_smoothed() {
+        use eframe::wgpu::FilterMode;
+        for smooth in [true, false] {
+            assert_eq!(zoom_texture_options(smooth).magnification, egui::TextureFilter::Nearest);
+            assert_eq!(zoom_sampler(smooth).mag_filter, FilterMode::Nearest);
+        }
+        assert_eq!(zoom_texture_options(true).minification, egui::TextureFilter::Linear);
+        assert_eq!(zoom_sampler(true).min_filter, FilterMode::Linear);
+    }
 
     /// A perspective-like homography: w = 100 + y (the plane crosses the camera at y = −100).
     fn tilted() -> Mat3 {

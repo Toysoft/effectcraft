@@ -1974,3 +1974,25 @@ fn vertex_tools_edit_motion_path_keyframes() {
     click(&mut h, quarter);
     assert_eq!(keys(&h).len(), 3);
 }
+
+/// #882: at 100 % (and 200 %) on a scaled display the frame's corner sits on a physical pixel, so
+/// every comp pixel covers whole screen pixels instead of being blended with its neighbour.
+#[test]
+fn frame_sits_on_the_physical_pixel_grid() {
+    for ppp in [1.0f32, 1.25, 1.5] {
+        let mut s = Session::default();
+        s.execute("comp.new", json!({"name": "Grid", "width": 301, "height": 201, "duration": 1})).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_pixels_per_point(ppp).build_eframe(move |_| EffectcraftApp::new(s));
+        h.run_steps(3);
+        for (mag, pan) in [(1.0f32, [0.3f32, 0.37]), (2.0, [-0.45, 0.2])] {
+            h.state_mut().ui.viewer.zoom = Some(mag / ppp);
+            h.state_mut().ui.viewer.pan = pan;
+            h.run_steps(2);
+            let c = rect(&h, "viewer.comp");
+            for v in [c.min.x * ppp, c.min.y * ppp] {
+                assert!((v - v.round()).abs() < 1e-3, "ppp {ppp}, {mag}×: corner at {v} physical px");
+            }
+            assert!((c.width() * ppp - 301.0 * mag).abs() < 1e-2, "ppp {ppp}, {mag}×: {} physical px wide", c.width() * ppp);
+        }
+    }
+}

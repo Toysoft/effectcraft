@@ -403,7 +403,8 @@ pub(crate) fn draw_frame(app: &mut EffectcraftApp, ctx: &egui::Context, painter:
             _ => {
                 let img = crate::frames::to_color_image(&s.image);
                 let img = if plain { img } else { transformed(&img, opts.channel, opts.colorized, opts.exposure, dc) };
-                let tex = crate::frames::load_fitted(ctx, "viewer-snapshot", img, egui::TextureOptions::LINEAR);
+                let opts = super::viewer::zoom_texture_options(app.session.prefs.viewer_zoom_smooth());
+                let tex = crate::frames::load_fitted(ctx, "viewer-snapshot", img, opts);
                 ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
                 tex
             }

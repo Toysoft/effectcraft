@@ -94,7 +94,9 @@ Commands (CLI, MCP, control channel):
   how much of a position motion path the viewer draws (all, none, N seconds or N keyframes
   around the current time)
 - `previews.showInternalWireframes`: outlines of the layers inside a selected collapsed precomp
-- `previews.zoomQuality`: Faster = nearest-neighbour viewer scaling, More Accurate = bilinear
+- `previews.zoomQuality`: Faster = nearest-neighbour viewer scaling, More Accurate = averaged
+  (bilinear, mipmapped) when the frame is shown below 100 %; magnified frames show their pixels as
+  blocks in both modes, and the frame sits on the physical pixel grid, so 100 % is exact
 - `previews.displayProfile`: the monitor's colour space for View ▸ Use Display Color Management
 - `appearance.useLabelColorForTabs`: Composition / Timeline tabs show the comp's label colour,
   Effect Controls / Properties the layer's
