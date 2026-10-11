@@ -414,6 +414,25 @@ fn time_set_snaps_to_the_nearest_frame_and_ae_timecode() {
     assert_eq!(effectcraft_time::format_timecode_ae(75, fr, true), "0;00;02;15");
 }
 
+/// #890: at 29.97 / 59.94 fps the displayed (non-drop) timecode was read back as drop-frame, so
+/// committing the current-time field moved the playhead to another frame from minute 1 on.
+#[test]
+fn time_set_round_trips_the_displayed_timecode_at_drop_frame_rates() {
+    for fps in [29.97, 59.94] {
+        let mut s = Session::default();
+        s.execute("comp.new", json!({"name": "T", "width": 64, "height": 64, "frameRate": fps, "duration": 4000})).unwrap();
+        for frame in [0_i64, 1799, 1800, 1801, 3600, 17982, 17983, 100_000] {
+            let r = s.execute("time.set", json!({"frame": frame})).unwrap();
+            let display = r["display"].as_str().unwrap().to_string();
+            let r = s.execute("time.set", json!({"timecode": display})).unwrap();
+            assert_eq!(r["frame"], frame, "{fps} fps: displayed {display}");
+        }
+        // Explicit drop-frame fields still mean drop-frame.
+        let r = s.execute("time.set", json!({"timecode": "0;01;00;02"})).unwrap();
+        assert_eq!(r["frame"], if fps > 30.0 { 3598 } else { 1800 });
+    }
+}
+
 #[test]
 fn time_set_keeps_the_frame_shown_in_the_current_time_field() {
     let mut s = Session::default();

@@ -39,7 +39,10 @@ pub fn parse_display_time(s: &Session, comp: &Comp, text: &str, current: i64) ->
             effectcraft_time::parse_feet_frames(text, pf, current + start).map(|f| f - start).map_err(|e| e.0)
         }
         None => {
-            let parsed = effectcraft_time::parse_timecode(text, fr, fr.supports_drop_frame(), current).map_err(|e| e.0)?;
+            // The Timeline shows non-drop timecode (`:`), so typed `:`/`.` text is read as non-drop
+            // too; only explicit `;` fields mean drop-frame (#890).
+            let drop_frame = fr.supports_drop_frame() && text.contains(';');
+            let parsed = effectcraft_time::parse_timecode(text, fr, drop_frame, current).map_err(|e| e.0)?;
             let relative = text.trim().starts_with('+') || text.trim().starts_with('-');
             if relative {
                 Ok(parsed)
