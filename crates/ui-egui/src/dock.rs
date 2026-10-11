@@ -1256,7 +1256,7 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
                 } else {
                     t.text_faint
                 };
-                icons::paint(&painter, lr, Icon::Lock, lc);
+                icons::paint(&painter, lr, if d.locked { Icon::Lock } else { Icon::LockOpen }, lc);
                 reg.add_response(&format!("panel.tab.{}.lock", p.id()), &lresp, if d.locked { "Unlock" } else { "Lock" });
                 crate::widgets::focus_outline(ui, &lresp, t);
                 if lresp.clicked() {
