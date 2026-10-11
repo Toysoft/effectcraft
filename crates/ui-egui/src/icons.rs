@@ -92,6 +92,10 @@ pub enum Icon {
     Loop,
     Snapshot,
     ShowSnapshot,
+    /// Save / export: an arrow down into a tray.
+    Download,
+    /// Copy to the clipboard: two overlapping sheets.
+    Copy,
     Grid,
     MaskVis,
     Checker,
@@ -538,6 +542,15 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
         ShowSnapshot => {
             pen.line(&[(1.5, 8.0), (4.0, 5.0), (8.0, 3.8), (12.0, 5.0), (14.5, 8.0), (12.0, 11.0), (8.0, 12.2), (4.0, 11.0), (1.5, 8.0)]);
             pen.rect(6.0, 6.5, 10.0, 9.5);
+        }
+        Download => {
+            pen.line(&[(8.0, 2.0), (8.0, 10.0)]);
+            pen.line(&[(4.8, 7.0), (8.0, 10.2), (11.2, 7.0)]);
+            pen.line(&[(2.5, 10.5), (2.5, 13.5), (13.5, 13.5), (13.5, 10.5)]);
+        }
+        Copy => {
+            pen.rrect(5.5, 5.0, 13.5, 14.0, 1.2);
+            pen.line(&[(10.5, 5.0), (10.5, 2.5), (2.5, 2.5), (2.5, 11.0), (5.5, 11.0)]);
         }
         Grid => {
             pen.rect(2.0, 2.0, 14.0, 14.0);

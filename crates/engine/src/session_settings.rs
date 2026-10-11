@@ -8,8 +8,8 @@ use crate::shortcuts::{Keymaps, SHORTCUTS_FILE, ShortcutTable, UiCommand};
 use crate::{EngineError, Result, Session};
 
 impl Session {
-    /// Load settings, shortcut presets and scripts' settings from the config store and apply
-    /// them.
+    /// Load settings, shortcut presets, scripts' settings and Console Effect's from the config store
+    /// and apply them.
     pub fn load_settings(&mut self) {
         if let Some(c) = &self.config {
             if let Some(t) = c.read(PREFS_FILE) {
@@ -20,6 +20,7 @@ impl Session {
             }
         }
         crate::commands::scripts::load_script_settings(self);
+        crate::console_effect::load(self);
         self.prefs_changed();
         self.shortcuts_changed();
     }

@@ -12,6 +12,7 @@ mod batch;
 mod camera_cmds;
 mod comp;
 pub(crate) mod comp_more;
+mod console_effect;
 pub mod content_fill;
 mod create;
 mod edit;
@@ -180,6 +181,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(path_nulls::specs());
         v.extend(vr_editor::specs());
         v.extend(frontend::specs());
+        v.extend(console_effect::specs());
         v.extend(track::specs());
         v.extend(mask_interp::specs());
         v.extend(warp_cmds::specs());
