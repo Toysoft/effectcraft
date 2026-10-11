@@ -527,18 +527,22 @@ fn aux_views(
         return full;
     }
     let gap = 2.0;
+    let views = app.session.state.views3d.get(&cid).cloned().unwrap_or_default();
     let (main, aux): (Rect, Vec<(Rect, View3D)>) = if n == 2 {
         let mid = full.center().x;
-        (Rect::from_min_max(pos2(mid + gap / 2.0, full.min.y), full.max), vec![(Rect::from_min_max(full.min, pos2(mid - gap / 2.0, full.max.y)), View3D::Top)])
+        (
+            Rect::from_min_max(pos2(mid + gap / 2.0, full.min.y), full.max),
+            vec![(Rect::from_min_max(full.min, pos2(mid - gap / 2.0, full.max.y)), views.pane(0))],
+        )
     } else {
         let c = full.center();
         let q = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
         (
             q(c.x + gap / 2.0, c.y + gap / 2.0, full.max.x, full.max.y),
             vec![
-                (q(full.min.x, full.min.y, c.x - gap / 2.0, c.y - gap / 2.0), View3D::Top),
-                (q(c.x + gap / 2.0, full.min.y, full.max.x, c.y - gap / 2.0), View3D::Front),
-                (q(full.min.x, c.y + gap / 2.0, c.x - gap / 2.0, full.max.y), View3D::Right),
+                (q(full.min.x, full.min.y, c.x - gap / 2.0, c.y - gap / 2.0), views.pane(0)),
+                (q(c.x + gap / 2.0, full.min.y, full.max.x, c.y - gap / 2.0), views.pane(1)),
+                (q(full.min.x, c.y + gap / 2.0, c.x - gap / 2.0, full.max.y), views.pane(2)),
             ],
         )
     };
@@ -547,7 +551,6 @@ fn aux_views(
     p.rect_filled(full, 0.0, Color32::from_black_alpha(200));
     let t = app.session.time();
     let (cw, ch) = (comp.width as f32, comp.height as f32);
-    let views = app.session.state.views3d.get(&cid).cloned().unwrap_or_default();
     let share = app.session.state.share_view_options;
     // The camera and light wireframes of each view (as in After Effects, where every view of the
     // layout shows them), evaluated on a snapshot of the project.
@@ -555,12 +558,16 @@ fn aux_views(
     let snap_expr = app.session.expr.clone();
     let ectx = EvalCtx { project: &snap_project, comp_id: cid, comp, time: t, expr: snap_expr.as_deref(), footage: None };
     let selected = app.session.state.selected_layers.clone();
+    let mut picked: Option<(usize, View3D)> = None;
     for (i, (r, v)) in aux.into_iter().enumerate() {
         p.rect_filled(r, 0.0, bg);
         let fit = ((r.width() - 20.0) / cw).min((r.height() - 20.0) / ch).max(0.01);
         let cr = Rect::from_center_size(r.center(), vec2(cw * fit, ch * fit));
         let scale = (fit * ctx.pixels_per_point()).min(1.0) as f64;
-        let cam = views.cam(v, comp.width as f64, comp.height as f64).state();
+        // The Active Camera pane renders through the comp's own camera; the others through their
+        // view camera.
+        let through_active = v == View3D::ActiveCamera;
+        let cam = if through_active { three_d::active_camera(&ectx) } else { views.cam(v, comp.width as f64, comp.height as f64).state() };
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -572,7 +579,12 @@ fn aux_views(
         let tex = match cached {
             Some((k, tex)) if k == key => tex,
             _ => {
-                let opts = effectcraft_engine::render::RenderOpts { scale, view: comp.has_3d().then_some(cam), draft: true, ..Default::default() };
+                let opts = effectcraft_engine::render::RenderOpts {
+                    scale,
+                    view: (comp.has_3d() && !through_active).then_some(cam),
+                    draft: true,
+                    ..Default::default()
+                };
                 let img = app.session.render(cid, t, opts);
                 let tex = crate::frames::load_fitted(&ctx, format!("viewer-aux-{i}"), crate::frames::to_color_image(&img), egui::TextureOptions::LINEAR);
                 ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
@@ -590,13 +602,53 @@ fn aux_views(
         }
         if comp.has_3d() {
             let map = ViewerMap { origin: cr.min, zoom: fit, comp: [cw, ch], area: r };
-            draw_rigs(app, &p.with_clip_rect(r), &map, &ectx, &selected, cam, false, Some(v.id()));
+            draw_rigs(app, &p.with_clip_rect(r), &map, &ectx, &selected, cam, through_active, Some(v.id()));
         }
         let label = if comp.has_3d() { v.label() } else { crate::i18n::tr("Active Camera") };
         p.text(r.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, label, Tokens::ui(11.0), Color32::from_white_alpha(200));
         app.auto.add(&format!("viewer.view.{}", v.id()), r, label);
+        if comp.has_3d()
+            && let Some(chosen) = pane_selector(app, ui, i + 1, r, v)
+        {
+            picked = Some((i + 1, chosen));
+        }
+    }
+    if let Some((pane, v)) = picked
+        && let Err(e) = app.session.execute("view.setPaneView", json!({"pane": pane, "view": v.id(), "comp": cid.0}))
+    {
+        app.ui.status = e.to_string();
     }
     main
+}
+
+/// The view selector in the top-left corner of pane `pane` (1 to 3) of a multi-view layout, a
+/// popup of every 3D view like the toolbar's 3D View menu. Returns the view chosen this frame.
+fn pane_selector(app: &mut EffectcraftApp, ui: &mut egui::Ui, pane: usize, area: Rect, current: View3D) -> Option<View3D> {
+    let t = app.tokens;
+    let r = Rect::from_min_size(area.min + vec2(6.0, 6.0), vec2(124.0, 20.0));
+    let pid = egui::Id::new(("viewer-pane-view", pane));
+    let response = widgets::dropdown(ui, r, crate::i18n::tr(current.label()), &t, pid);
+    if response.clicked() {
+        let open = widgets::popup_is_open(ui, pid);
+        ui.data_mut(|d| d.insert_temp(pid.with("open"), !open));
+    }
+    app.auto.add_response(&format!("viewer.view.{pane}.type"), &response, "View of pane");
+    if !widgets::popup_is_open(ui, pid) {
+        return None;
+    }
+    let chosen = widgets::popup_list(ui, pid, r.left_bottom() + vec2(0.0, 2.0), r, View3D::ALL.len(), 0, |ui| {
+        ui.set_min_width(124.0);
+        let mut chosen = None;
+        for (k, v) in View3D::ALL.iter().enumerate() {
+            let item = ui.selectable_label(*v == current, crate::i18n::tr(v.label()));
+            app.auto.add(&format!("viewer.view.{pane}.typeItem.{k}"), item.rect, v.label());
+            if item.clicked() {
+                chosen = Some(*v);
+            }
+        }
+        chosen
+    });
+    chosen.filter(|v| *v != current)
 }
 
 /// View ▸ Split with New Locked Viewer: the locked viewer on the left of the Composition panel
