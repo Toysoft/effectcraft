@@ -1,6 +1,10 @@
 //! Character Fill and Stroke can sample a displayed Composition pixel.
 use effectcraft_engine::{Session, commands::text_edit::layer_doc, project::LayerId};
-use effectcraft_ui_egui::{EffectcraftApp, dock::PanelKind, panels::viewer::comp_to_screen};
+use effectcraft_ui_egui::{
+    EffectcraftApp,
+    dock::{DockNode, PanelKind, SplitSize},
+    panels::viewer::comp_to_screen,
+};
 use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
 use serde_json::json;
@@ -64,17 +68,24 @@ fn character_stroke_eyedropper_samples_viewer() {
     s.execute("comp.new", json!({"width": 320, "height": 180, "duration": 2})).unwrap();
     s.execute("layer.newSolid", json!({"name": "brat green", "color": "#8ACE00"})).unwrap();
     let text = s.execute("layer.newText", json!({"text": "brat", "font": "Inter"})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("layer.setText", json!({"layer": text, "fill": [0.0, 0.0, 0.0]})).unwrap();
+    s.execute("layer.setText", json!({"layer": text, "fill": [0.0, 0.0, 0.0], "size": 32.0})).unwrap();
     let mut app = EffectcraftApp::new(s);
-    app.set_workspace("Text");
-    let builder = Harness::builder().with_size(vec2(1600.0, 1400.0));
+    app.ui.viewer.show_layer_controls = false;
+    app.ui.dock = DockNode::Split {
+        vertical: false,
+        size: SplitSize::FixedB(360.0),
+        a: Box::new(DockNode::Tabs { panels: vec![PanelKind::Composition], active: 0 }),
+        b: Box::new(DockNode::Tabs { panels: vec![PanelKind::Character], active: 0 }),
+    };
+    let builder = Harness::builder().with_size(vec2(1200.0, 760.0));
     let mut h = if std::env::var_os("EC_SNAPSHOT_DIR").is_some() { builder.wgpu().build_eframe(|_| app) } else { builder.build_eframe(|_| app) };
     h.state_mut().show_panel(PanelKind::Character);
+    h.state_mut().show_panel(PanelKind::Composition);
     settle(&mut h);
+    click_auto(&mut h, "character.stroke.eyedropper");
     if let Ok(dir) = std::env::var("EC_SNAPSHOT_DIR") {
         h.render().unwrap().save(format!("{dir}/character-eyedropper.png")).unwrap();
     }
-    click_auto(&mut h, "character.stroke.eyedropper");
     let sample = comp_to_screen(&h.ctx, [20.0, 20.0]).unwrap();
     click(&mut h, sample);
     let doc = layer_doc(&h.state().session, LayerId(text)).unwrap();
