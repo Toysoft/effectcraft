@@ -94,6 +94,8 @@ pub enum Dialog {
     UnsavedChanges,
     /// Delete Project items that compositions use? (`panels::delete_items`).
     DeleteItems,
+    /// Delete a user template from Home? (`panels::templates`).
+    DeleteTemplate,
 }
 
 /// The desktop's light or dark appearance where egui cannot see it (Wayland compositors that send

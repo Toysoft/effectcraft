@@ -12,7 +12,8 @@
 //! Automation ids: `shortcuts.preset`, `shortcuts.search`, `shortcuts.mod.<ctrl|cmd|alt|shift>`,
 //! `shortcuts.key.<Key>`, `shortcuts.row.<n>`, `shortcuts.record`, `shortcuts.assign`,
 //! `shortcuts.removeKey.<n>`, `shortcuts.resetCommand`, `shortcuts.duplicate`,
-//! `shortcuts.rename`, `shortcuts.delete`, `shortcuts.import`, `shortcuts.export`,
+//! `shortcuts.rename`, `shortcuts.delete` (asks in place: `shortcuts.delete.confirm`,
+//! `shortcuts.delete.cancel`), `shortcuts.import`, `shortcuts.export`,
 //! `shortcuts.resetPreset`, `shortcuts.close`.
 
 use crate::i18n::{tr, tr_args};
@@ -39,6 +40,8 @@ pub struct EditorState {
     pub pending: String,
     /// Rename field for the active preset.
     pub rename: Option<String>,
+    /// The preset Delete is asking about (`shortcuts.delete.confirm` / `shortcuts.delete.cancel`).
+    pub confirm_delete: Option<String>,
 }
 
 const APP_COLOR: Color32 = Color32::from_rgb(0x8e, 0x6c, 0xe8);
@@ -269,10 +272,28 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                     st.rename = Some(active.clone());
                 }
             }
-            let b = ui.add_enabled(custom, egui::Button::new(tr("Delete")));
-            app.auto.add("shortcuts.delete", b.rect, "Delete");
-            if b.clicked() {
-                run.push(("shortcuts.preset".into(), json!({"op": "delete", "name": active})));
+            // A deleted preset can't be brought back: Delete asks in place first.
+            if st.confirm_delete.as_deref() == Some(active.as_str()) {
+                ui.label(RichText::new(format!("Delete “{active}”?")).color(t.warning));
+                let b = ui.add(egui::Button::new(RichText::new(tr("Delete")).color(Color32::WHITE)).fill(t.danger));
+                app.auto.add("shortcuts.delete.confirm", b.rect, "Delete");
+                if b.clicked() {
+                    run.push(("shortcuts.preset".into(), json!({"op": "delete", "name": active})));
+                    st.confirm_delete = None;
+                }
+                let b = ui.button(tr("Cancel"));
+                app.auto.add("shortcuts.delete.cancel", b.rect, "Cancel");
+                if b.clicked() {
+                    st.confirm_delete = None;
+                }
+            } else {
+                // Another preset was selected meanwhile: the question was about the old one.
+                st.confirm_delete = None;
+                let b = ui.add_enabled(custom, egui::Button::new(tr("Delete")));
+                app.auto.add("shortcuts.delete", b.rect, "Delete");
+                if b.clicked() {
+                    st.confirm_delete = Some(active.clone());
+                }
             }
             let b = ui.add_enabled(custom, egui::Button::new(tr("Reset Preset")));
             app.auto.add("shortcuts.resetPreset", b.rect, "Reset Preset");
@@ -600,6 +621,41 @@ mod tests {
         app.auto.begin_frame();
         let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| crate::panels::dialogs::show(app, ui.ctx()));
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn deleting_a_preset_asks_in_place_first() {
+        fn click(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str) {
+            let [x, y, w, h] = app.auto.find(id).unwrap_or_else(|| panic!("{id} is not on screen")).rect;
+            let pos = pos2(x + w / 2.0, y + h / 2.0);
+            let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            for event in [egui::Event::PointerMoved(pos), button(true), button(false)] {
+                frame(app, ctx, vec![event]);
+            }
+            // Two more: the automation ids of the clicked frame age out.
+            frame(app, ctx, vec![]);
+            frame(app, ctx, vec![]);
+        }
+        let mut app = EffectcraftApp::new(effectcraft_engine::Session::default());
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx, &app.tokens, crate::i18n::language(&app));
+        app.session.execute("shortcuts.preset", json!({"op": "duplicate", "from": DEFAULT_PRESET, "name": "Mine"})).unwrap();
+        app.session.execute("shortcuts.preset", json!({"op": "select", "name": "Mine"})).unwrap();
+        let has = |app: &EffectcraftApp| app.session.keymaps.names().iter().any(|n| n == "Mine");
+        open(&mut app);
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        assert!(app.auto.find("shortcuts.delete.confirm").is_none());
+        click(&mut app, &ctx, "shortcuts.delete");
+        assert!(has(&app), "the first click only asks");
+        assert!(app.auto.find("shortcuts.delete").is_none());
+        click(&mut app, &ctx, "shortcuts.delete.cancel");
+        assert!(has(&app) && app.auto.find("shortcuts.delete.confirm").is_none(), "Cancel keeps the preset");
+        click(&mut app, &ctx, "shortcuts.delete");
+        click(&mut app, &ctx, "shortcuts.delete.confirm");
+        assert!(!has(&app), "confirmed: the preset is gone");
+        assert!(app.dialog_state.shortcuts.confirm_delete.is_none());
     }
 
     #[test]
