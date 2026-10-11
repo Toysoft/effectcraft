@@ -195,3 +195,31 @@ fn extended_viewer_renders_past_the_comp_frame() {
     h.step();
     assert!(h.state().ui.viewer.extended.is_none());
 }
+
+/// #875: the Top / Front / Right views of a 4-view layout draw the camera wireframe (they drew
+/// none, so moving the camera showed nothing there), and it follows the camera's Position.
+#[test]
+fn layout_views_draw_the_camera_and_follow_its_position() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "C", "width": 640, "height": 360, "duration": 2})).unwrap();
+    let solid = s.execute("layer.newSolid", json!({"color": "#ff0000", "width": 200, "height": 200})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.setSwitch", json!({"layer": solid, "switch": "threeD", "value": true})).unwrap();
+    let cam = s.execute("layer.newCamera", json!({"position": [320, 180, -300], "poi": [320, 180, 0]})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("view.layout", json!({"views": 4})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(|_| EffectcraftApp::new(s));
+    settle(&mut h);
+    let centre = |h: &Harness<'_, EffectcraftApp>, view: &str| {
+        let id = format!("viewer.view.{view}.camera.{cam}");
+        let [x, y, w, hh] = h.state().auto.find(&id).unwrap_or_else(|| panic!("{id} is registered")).rect;
+        (x + w / 2.0, y + hh / 2.0)
+    };
+    for v in ["top", "front", "right"] {
+        centre(&h, v);
+    }
+    let before = centre(&h, "top");
+    h.state_mut().session.execute("prop.set", json!({"layer": cam, "path": "transform/position", "value": [480, 180, -300]})).unwrap();
+    settle(&mut h);
+    let after = centre(&h, "top");
+    assert!(after.0 - before.0 > 10.0, "the camera moves right in the Top view: {before:?} -> {after:?}");
+    assert!((after.1 - before.1).abs() < 1.0, "{before:?} -> {after:?}");
+}

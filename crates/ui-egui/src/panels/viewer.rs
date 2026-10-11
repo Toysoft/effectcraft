@@ -549,6 +549,12 @@ fn aux_views(
     let (cw, ch) = (comp.width as f32, comp.height as f32);
     let views = app.session.state.views3d.get(&cid).cloned().unwrap_or_default();
     let share = app.session.state.share_view_options;
+    // The camera and light wireframes of each view (as in After Effects, where every view of the
+    // layout shows them), evaluated on a snapshot of the project.
+    let snap_project = app.session.project.clone();
+    let snap_expr = app.session.expr.clone();
+    let ectx = EvalCtx { project: &snap_project, comp_id: cid, comp, time: t, expr: snap_expr.as_deref(), footage: None };
+    let selected = app.session.state.selected_layers.clone();
     for (i, (r, v)) in aux.into_iter().enumerate() {
         p.rect_filled(r, 0.0, bg);
         let fit = ((r.width() - 20.0) / cw).min((r.height() - 20.0) / ch).max(0.01);
@@ -581,6 +587,10 @@ fn aux_views(
             for k in [0.9, 0.8] {
                 p.rect_stroke(Rect::from_center_size(cr.center(), cr.size() * k), 0.0, Stroke::new(1.0, Color32::from_white_alpha(120)), StrokeKind::Middle);
             }
+        }
+        if comp.has_3d() {
+            let map = ViewerMap { origin: cr.min, zoom: fit, comp: [cw, ch], area: r };
+            draw_rigs(app, &p.with_clip_rect(r), &map, &ectx, &selected, cam, false, Some(v.id()));
         }
         let label = if comp.has_3d() { v.label() } else { crate::i18n::tr("Active Camera") };
         p.text(r.left_bottom() + vec2(8.0, -8.0), Align2::LEFT_BOTTOM, label, Tokens::ui(11.0), Color32::from_white_alpha(200));
@@ -1054,7 +1064,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
 
     // Cameras and lights (wireframes) and the 3D view name.
     if comp.has_3d() {
-        draw_rigs(app, &painter, &map, &ectx, &selected);
+        let through_active = VIEW_CAM.with(|c| c.get()).is_none();
+        draw_rigs(app, &painter, &map, &ectx, &selected, cam_state(&ectx), through_active, None);
         let view = app.session.state.views3d.get(&cid).map(|v| v.current).unwrap_or_default();
         let label = match (view, comp.active_camera(time)) {
             (View3D::ActiveCamera, Some(c)) => format!("Active Camera ({})", c.name),
@@ -1880,13 +1891,26 @@ fn drag_axes(ctx: &EvalCtx, l: &Layer) -> ([f64; 3], [f64; 3]) {
 
 /// Wireframes of cameras (frustum, point of interest) and lights (position, direction) as seen
 /// through the current 3D view.
-fn draw_rigs(app: &mut EffectcraftApp, painter: &egui::Painter, map: &ViewerMap, ectx: &EvalCtx, selected: &[LayerId]) {
+/// Camera and light wireframes seen through `cam` (`through_active`: `cam` is the active camera,
+/// which is then not drawn). `pane` names the automation ids: `None` for the main view
+/// (`viewer.camera.<id>`), `Some(view)` for a view of a 2- or 4-view layout
+/// (`viewer.view.<view>.camera.<id>`).
+#[allow(clippy::too_many_arguments)]
+fn draw_rigs(
+    app: &mut EffectcraftApp,
+    painter: &egui::Painter,
+    map: &ViewerMap,
+    ectx: &EvalCtx,
+    selected: &[LayerId],
+    cam: CameraState,
+    through_active: bool,
+    pane: Option<&str>,
+) {
     use effectcraft_engine::geom::Vec3;
     use effectcraft_engine::project::{LayerSource, LightKind};
-    let cam = cam_state(ectx);
     let (w, h) = (ectx.comp.width as f64, ectx.comp.height as f64);
     let active = ectx.comp.active_camera(ectx.time).map(|c| c.id);
-    let through_active = VIEW_CAM.with(|c| c.get()).is_none();
+    let prefix = pane.map(|v| format!("viewer.view.{v}.")).unwrap_or_else(|| "viewer.".to_string());
     let proj = |p: Vec3| cam.project(w, h, p).map(|v| map.to_screen([v.x, v.y]));
     let seg = |a: Vec3, b: Vec3, stroke: Stroke| {
         if let (Some(x), Some(y)) = (proj(a), proj(b)) {
@@ -1923,7 +1947,7 @@ fn draw_rigs(app: &mut EffectcraftApp, painter: &egui::Painter, map: &ViewerMap,
                 }
             }
             if let Some(s) = proj(eye) {
-                app.auto.add(&format!("viewer.camera.{}", l.id.0), Rect::from_center_size(s, vec2(14.0, 14.0)), &l.name);
+                app.auto.add(&format!("{prefix}camera.{}", l.id.0), Rect::from_center_size(s, vec2(14.0, 14.0)), &l.name);
             }
         } else {
             let LayerSource::Light { kind } = l.source else { continue };
@@ -1944,7 +1968,7 @@ fn draw_rigs(app: &mut EffectcraftApp, painter: &egui::Painter, map: &ViewerMap,
                     painter.circle_stroke(q, 3.0, stroke);
                 }
             }
-            app.auto.add(&format!("viewer.light.{}", l.id.0), Rect::from_center_size(s, vec2(16.0, 16.0)), &l.name);
+            app.auto.add(&format!("{prefix}light.{}", l.id.0), Rect::from_center_size(s, vec2(16.0, 16.0)), &l.name);
         }
     }
 }
