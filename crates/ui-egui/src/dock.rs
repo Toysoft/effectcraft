@@ -1182,7 +1182,7 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
                 Some(_) => 14.0,
                 None => 0.0,
             };
-            let w = galley.size().x + 16.0 + menu_w + deco_w;
+            let w = galley.size().x + 8.0 + menu_w + deco_w;
             if x + w > strip.max.x - 20.0 && k > ai {
                 let r = Rect::from_min_size(pos2(strip.max.x - 22.0, strip.min.y + 6.0), vec2(18.0, 20.0));
                 let resp = ui.interact(r, egui::Id::new(("tab-overflow", g.path.clone())), Sense::click());
@@ -1215,9 +1215,9 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
             if e.shown_doc {
                 reg.add_response(&format!("panel.tab.{}", p.id()), &resp, &e.label);
             }
-            let mut label_x = tab.min.x + 8.0;
+            let mut label_x = tab.min.x + 4.0;
             if let Some(d) = e.deco {
-                let mut dx = tab.min.x + 6.0;
+                let mut dx = tab.min.x + 3.0;
                 if is_active && d.viewer {
                     let cr = Rect::from_center_size(pos2(dx + 5.0, text_y), vec2(10.0, 10.0));
                     let cresp = ui.interact(cr.expand(2.0), egui::Id::new(("tab-close", g.path.clone(), k)), Sense::click());
@@ -1266,9 +1266,9 @@ pub fn draw_group_chrome(ui: &mut egui::Ui, g: &Group, t: &Tokens, reg: &mut cra
                 for dy in [-3.5, 0.0, 3.5] {
                     painter.line_segment([pos2(mr.min.x, mr.center().y + dy), pos2(mr.max.x, mr.center().y + dy)], Stroke::new(1.5, mc));
                 }
-                // The active tab's underline: near the strip's bottom edge, from the tab's first
-                // decoration (close button, swatch) to its panel menu.
-                let ux = if e.deco.is_some() { tab.min.x + 6.0 } else { label_x };
+                // The active tab's underline: near the strip's bottom edge, from the tab's left
+                // padding to its panel menu.
+                let ux = tab.min.x + 4.0;
                 let uy = strip.max.y - 2.5;
                 painter.line_segment([pos2(ux, uy), pos2(mr.max.x, uy)], Stroke::new(1.0, t.tab_text_active));
                 crate::widgets::focus_outline(ui, &mresp, t);
