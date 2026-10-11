@@ -1245,6 +1245,21 @@ fn automation_roots_confine_file_access() {
         denied(&mut s, "save_project", json!({"path": p(&write.join("link"), "escaped.ecproj")}));
         assert!(!outside.join("escaped.ecproj").exists());
     }
+    // Console Effect: settings files and saved frames inside the roots only; what reaches files its
+    // settings name (shortcut and override presets, the gallery) is refused.
+    call_json(&mut s, "execute_command", json!({"command": "consoleEffect.exportSettings", "params": {"path": p(&write, "fx.json")}}));
+    denied(&mut s, "execute_command", json!({"command": "consoleEffect.exportSettings", "params": {"path": p(&outside, "fx.json")}}));
+    denied(&mut s, "execute_command", json!({"command": "consoleEffect.importSettings", "params": {"path": p(&outside, "fx.json")}}));
+    denied(&mut s, "execute_command", json!({"command": "consoleEffect.saveFrame", "params": {"path": p(&outside, "f.png")}}));
+    denied(
+        &mut s,
+        "execute_command",
+        json!({"command": "consoleEffect.override", "params": {"effect": "Levels", "overridePreset": p(&outside, "x.ecpreset")}}),
+    );
+    denied(&mut s, "execute_command", json!({"command": "consoleEffect.setSettings", "params": {"galleryFolder": p(&read, "gallery")}}));
+    for id in ["consoleEffect.apply", "consoleEffect.snapshot", "consoleEffect.revealGallery"] {
+        denied(&mut s, "execute_command", json!({"command": id, "params": {}}));
+    }
     // Scripts can read and write anything: refused.
     denied(&mut s, "run_script", json!({"code": "1 + 1"}));
     denied(&mut s, "execute_command", json!({"command": "file.runScript", "params": {"path": p(&read, "x.jsx")}}));

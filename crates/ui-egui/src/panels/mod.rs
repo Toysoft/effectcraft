@@ -3,6 +3,7 @@
 pub mod anim_tools;
 pub mod camera_tracker_ui;
 pub mod comp_settings;
+pub mod console_effect;
 pub mod content_fill_panel;
 pub mod delete_items;
 pub mod dialogs;
@@ -166,6 +167,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rec
         PanelKind::ContentAwareFill => content_fill_panel::show(app, ui, rect),
         PanelKind::CreateNullsFromPaths => path_vr_panels::create_nulls(app, ui, rect),
         PanelKind::VrCompEditor => path_vr_panels::vr_editor(app, ui, rect),
+        PanelKind::ConsoleEffect => console_effect::panel(app, ui, rect),
     }
 }
 

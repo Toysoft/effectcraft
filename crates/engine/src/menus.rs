@@ -592,6 +592,8 @@ Edit
     @dynamic:history
   ---
   Quick Apply... | app.commandPalette
+  [mac] Console Effect... | app.consoleEffect | Ctrl+Space
+  [!mac] Console Effect... | app.consoleEffect | Cmd+Space
   ---
   Cut | edit.cut
   Copy | edit.copy
@@ -1169,6 +1171,8 @@ Window
   Audio | window.panel {"panel":"audio"} | Cmd+4
   Brushes | window.panel {"panel":"brushes"} | Cmd+9
   Character | window.panel {"panel":"character"} | Cmd+6
+  Console Effect | window.panel {"panel":"consoleEffect"}
+  Console Effect Gallery | consoleEffect.openGallery
   Content-Aware Fill | window.panel {"panel":"contentAwareFill"}
   Effects & Presets | window.panel {"panel":"effectsPresets"} | Cmd+5
   Essential Graphics | window.panel {"panel":"essentialGraphics"}

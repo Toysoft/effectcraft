@@ -128,6 +128,11 @@ stylize (Glow, CC Glass…), **time** (Echo, Posterize Time, Timewarp, Time Disp
 controls. All nine **Layer Styles** (Drop Shadow, Inner/Outer Glow, Bevel and Emboss, Satin,
 overlays, Stroke) with Global Light. Preview plays audio in sync, with meters and waveforms.
 
+**Console Effect** is built in: press Ctrl+Space over the viewer, type part of an effect or preset
+name and press Enter. Favorites, aliases, overrides (an effect with your own defaults), a
+blacklist, nine number-key shortcuts, snapshots and a gallery for comparing designs
+([docs/console-effect.md](docs/console-effect.md)).
+
 <p align="center">
   <img src="docs/images/effectcraft-effects.png" alt="A CC Particle World burst with Glow, and the Effect Controls panel listing the particle system's parameters" width="100%">
 </p>

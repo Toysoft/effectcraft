@@ -60,6 +60,10 @@ pub struct DialogState {
     pub unsaved: super::unsaved::Pending,
     /// Deleting Project items in use: the deletion waiting on the prompt.
     pub delete_items: super::delete_items::Pending,
+    /// The Console Effect while it is open.
+    pub console_effect: super::console_effect::ConsoleState,
+    /// Console Effect Settings while it is open.
+    pub console_settings: super::console_effect::SettingsState,
 }
 
 pub fn open_new_comp(app: &mut EffectcraftApp) {
@@ -193,6 +197,8 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context) {
         Dialog::RenderTemplates => super::rq_templates::show(app, ctx, &t),
         Dialog::UnsavedChanges => super::unsaved::show(app, ctx, &t),
         Dialog::DeleteItems => super::delete_items::show(app, ctx, &t),
+        Dialog::ConsoleEffect => super::console_effect::show(app, ctx),
+        Dialog::ConsoleEffectSettings => super::console_effect::settings_dialog(app, ctx, &t),
     }
 }
 
