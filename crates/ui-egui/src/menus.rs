@@ -746,6 +746,12 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             app.dialog = Some(crate::Dialog::About);
             Value::Null
         }
+        "help.checkUpdates" => {
+            app.dialog_state.startup_update_checking = false;
+            app.dialog = Some(crate::Dialog::CheckUpdates);
+            app.dialog_state.start_update_check();
+            Value::Null
+        }
         // Window ▸ <ScriptUI panel>: dock (or bring forward) the panel the script built.
         // Audio scrubbing: one frame of audio at `time` (default the current time).
         "playback.scrubAudio" => {

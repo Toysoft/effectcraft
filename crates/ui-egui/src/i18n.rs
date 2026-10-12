@@ -8,7 +8,7 @@ use crate::EffectcraftApp;
 /// Translations for the panels, tooltips and dialogs below the menu bar (see the module docs).
 mod ui;
 use effectcraft_engine::menus::MenuEntry;
-pub(crate) use ui::{set_current, tr, tr_args};
+pub(crate) use ui::{all_translations, set_current, tr, tr_args};
 
 /// Every language with a catalog, in the order Settings ▸ General ▸ Language lists them.
 const CATALOG_CODES: [&str; 6] = ["ja", "zh-hans", "zh-hant", "uk", "es", "pt-br"];
@@ -846,6 +846,7 @@ const SIMPLIFIED_CHINESE: &[(&str, &str, &str)] = &[
     ("help.appPage", "EffectCraft Home Page", "EffectCraft 主页"),
     ("help.github", "EffectCraft on GitHub", "GitHub 上的 EffectCraft"),
     ("file.openDemoProject", "Open Demo Project", "打开示例项目"),
+    ("help.checkUpdates", "Check for Updates...", "检查更新..."),
 ];
 
 /// Traditional Chinese (zh-hant): the same (command, English label) keys as `JAPANESE`, one
@@ -1470,6 +1471,7 @@ const TRADITIONAL_CHINESE: &[(&str, &str, &str)] = &[
     ("help.appPage", "EffectCraft Home Page", "EffectCraft 首頁"),
     ("help.github", "EffectCraft on GitHub", "GitHub 上的 EffectCraft"),
     ("file.openDemoProject", "Open Demo Project", "開啟範例專案"),
+    ("help.checkUpdates", "Check for Updates...", "檢查更新..."),
 ];
 
 const JAPANESE: &[(&str, &str, &str)] = &[
@@ -2091,6 +2093,7 @@ const JAPANESE: &[(&str, &str, &str)] = &[
     ("help.appPage", "EffectCraft Home Page", "EffectCraftホームページ"),
     ("help.github", "EffectCraft on GitHub", "GitHubのEffectCraft"),
     ("file.openDemoProject", "Open Demo Project", "デモプロジェクトを開く"),
+    ("help.checkUpdates", "Check for Updates...", "アップデートを確認..."),
 ];
 
 /// Ukrainian (uk): original translations of the English menu labels, using ordinary
@@ -2715,6 +2718,7 @@ const UKRAINIAN: &[(&str, &str, &str)] = &[
     ("help.appPage", "EffectCraft Home Page", "Домашня сторінка EffectCraft"),
     ("help.github", "EffectCraft on GitHub", "EffectCraft на GitHub"),
     ("file.openDemoProject", "Open Demo Project", "Відкрити демонстраційний проєкт"),
+    ("help.checkUpdates", "Check for Updates...", "Перевірити наявність оновлень..."),
 ];
 
 /// Spanish (es): the same (command, English label) keys as `JAPANESE`, one entry per fixed menu
@@ -3340,6 +3344,7 @@ const SPANISH: &[(&str, &str, &str)] = &[
     ("help.appPage", "EffectCraft Home Page", "Página de inicio de EffectCraft"),
     ("help.github", "EffectCraft on GitHub", "EffectCraft en GitHub"),
     ("file.openDemoProject", "Open Demo Project", "Abrir proyecto de demostración"),
+    ("help.checkUpdates", "Check for Updates...", "Buscar actualizaciones..."),
 ];
 
 /// Brazilian Portuguese: the same (command, English label) keys as `JAPANESE`, one entry
@@ -3963,6 +3968,7 @@ const PORTUGUESE: &[(&str, &str, &str)] = &[
     ("help.appPage", "EffectCraft Home Page", "Página inicial do EffectCraft"),
     ("help.github", "EffectCraft on GitHub", "EffectCraft no GitHub"),
     ("file.openDemoProject", "Open Demo Project", "Abrir projeto de demonstração"),
+    ("help.checkUpdates", "Check for Updates...", "Verificar se há atualizações..."),
 ];
 
 #[cfg(test)]

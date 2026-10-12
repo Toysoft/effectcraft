@@ -20,6 +20,7 @@ use crate::{Dialog, EffectcraftApp};
 pub fn open(app: &mut EffectcraftApp, page: &str) {
     if app.dialog != Some(Dialog::Settings) {
         app.dialog_state.prefs_snapshot = Some(app.session.prefs.clone());
+        app.dialog_state.settings_search.clear();
     }
     app.dialog_state.settings_page = page.to_string();
     app.dialog = Some(Dialog::Settings);
@@ -48,17 +49,222 @@ fn reg(app: &mut EffectcraftApp, id: &str, r: &egui::Response, label: &str) {
     app.auto.add(id, r.rect, label);
 }
 
-/// One page's rows.
-fn page_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, page: &Page, cur: &Value, t: &Tokens, acts: &mut Vec<Act>) {
+/// Match rank prioritizing exact prefix (^<query>), then word boundary (\b<query>), then substring (*<query>*);
+/// and English, then all translations, then description/context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ItemRank {
+    /// 1. English label starts with query (^<query>)
+    EnLabelPrefix = 0,
+    /// 2. English label word boundary starts with query (\b<query>)
+    EnLabelWord = 1,
+    /// 3. English label contains query (*<query>*)
+    EnLabelSubstring = 2,
+    /// 4. English setting key or command matches query
+    EnKeyMatch = 3,
+    /// 5. Translation in any language starts with query (^<query>)
+    I18nLabelPrefix = 4,
+    /// 6. Translation in any language word boundary starts with query (\b<query>)
+    I18nLabelWord = 5,
+    /// 7. Translation in any language contains query (*<query>*)
+    I18nLabelSubstring = 6,
+    /// 8. Section title or Note starts with query (^<query>)
+    DescPrefix = 7,
+    /// 9. Section title or Note word boundary starts with query (\b<query>)
+    DescWord = 8,
+    /// 10. Section title or Note contains query (*<query>*)
+    DescSubstring = 9,
+}
+
+#[derive(Clone, Debug)]
+pub struct SearchHit {
+    pub page_id: &'static str,
+    pub page_title: &'static str,
+    pub section_title: &'static str,
+    pub item: Item,
+    pub rank: ItemRank,
+    pub page_index: usize,
+    pub item_index: usize,
+}
+
+fn matches_word_boundary(text: &str, query: &str) -> bool {
+    let q = query.to_lowercase();
+    let lower = text.to_lowercase();
+    if q.is_empty() {
+        return false;
+    }
+    let mut prev_char = ' ';
+    for (i, c) in text.char_indices() {
+        let is_boundary = if i == 0 {
+            true
+        } else if !prev_char.is_alphanumeric() && c.is_alphanumeric() {
+            true
+        } else if prev_char.is_lowercase() && c.is_uppercase() {
+            true
+        } else {
+            false
+        };
+        prev_char = c;
+        if is_boundary && lower[i..].starts_with(&q) {
+            return true;
+        }
+    }
+    false
+}
+
+fn evaluate_item_rank(
+    query: &str,
+    en_label: &str,
+    key_or_cmd: &str,
+    i18n_labels: &[&str],
+    desc_texts: &[&str],
+) -> Option<ItemRank> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return None;
+    }
+    let en_lower = en_label.to_lowercase();
+
+    // 1. Zuerst Englisch: ^<query> (Prefix)
+    if en_lower.starts_with(&q) {
+        return Some(ItemRank::EnLabelPrefix);
+    }
+    // 2. Englisch: \b<query> (Word boundary)
+    if matches_word_boundary(en_label, &q) {
+        return Some(ItemRank::EnLabelWord);
+    }
+    // 3. Englisch: *<query>* (Substring)
+    if en_lower.contains(&q) {
+        return Some(ItemRank::EnLabelSubstring);
+    }
+    // 4. Setting-Key / Befehl (z.B. "general.undoLevels", "undoLevels")
+    if !key_or_cmd.is_empty() {
+        let key_lower = key_or_cmd.to_lowercase();
+        if key_lower.starts_with(&q) || matches_word_boundary(key_or_cmd, &q) || key_lower.contains(&q) {
+            return Some(ItemRank::EnKeyMatch);
+        }
+    }
+    // 5. Übersetzungen: ^<query> (Prefix)
+    for t in i18n_labels {
+        let t_lower = t.to_lowercase();
+        if t_lower.starts_with(&q) {
+            return Some(ItemRank::I18nLabelPrefix);
+        }
+    }
+    // 6. Übersetzungen: \b<query> (Word boundary)
+    for t in i18n_labels {
+        if matches_word_boundary(t, &q) {
+            return Some(ItemRank::I18nLabelWord);
+        }
+    }
+    // 7. Übersetzungen: *<query>* (Substring)
+    for t in i18n_labels {
+        let t_lower = t.to_lowercase();
+        if t_lower.contains(&q) {
+            return Some(ItemRank::I18nLabelSubstring);
+        }
+    }
+    // 8. Description / Notiz / Sektion: ^<query> (Prefix)
+    for d in desc_texts {
+        let d_lower = d.to_lowercase();
+        if d_lower.starts_with(&q) {
+            return Some(ItemRank::DescPrefix);
+        }
+    }
+    // 9. Description / Notiz / Sektion: \b<query> (Word boundary)
+    for d in desc_texts {
+        if matches_word_boundary(d, &q) {
+            return Some(ItemRank::DescWord);
+        }
+    }
+    // 10. Description / Notiz / Sektion: *<query>* (Substring)
+    for d in desc_texts {
+        let d_lower = d.to_lowercase();
+        if d_lower.contains(&q) {
+            return Some(ItemRank::DescSubstring);
+        }
+    }
+
+    None
+}
+
+pub fn search_settings(all_pages: &[Page], query: &str) -> Vec<SearchHit> {
+    let mut hits = Vec::new();
+    let q = query.trim();
+    if q.is_empty() {
+        return hits;
+    }
+
+    for (page_idx, page) in all_pages.iter().enumerate() {
+        let mut cur_section = page.title;
+        let mut notes_for_item: std::collections::HashMap<usize, &'static str> = std::collections::HashMap::new();
+        for (i, item) in page.items.iter().enumerate() {
+            if let Item::Note(n) = item {
+                if i > 0 {
+                    notes_for_item.insert(i - 1, *n);
+                }
+            }
+        }
+
+        for (item_idx, item) in page.items.iter().enumerate() {
+            match item {
+                Item::Section(sec) => {
+                    cur_section = *sec;
+                }
+                Item::Note(_) => {}
+                _ => {
+                    let (en_label, key_or_cmd) = match item {
+                        Item::Setting { label, key, .. } => (*label, *key),
+                        Item::Button { label, command, .. } => (*label, *command),
+                        Item::AudioDevices { key } => ("Default Output", *key),
+                        Item::Labels => ("Labels", "labels"),
+                        Item::BrowserStorage => ("Browser Storage", "storage"),
+                        Item::Models(_) => ("Trained Models", "models"),
+                        _ => ("", ""),
+                    };
+
+                    let tr_label = tr(en_label);
+                    let mut i18n = vec![tr_label];
+                    for t in crate::i18n::all_translations(en_label) {
+                        if !i18n.contains(&t) {
+                            i18n.push(t);
+                        }
+                    }
+
+                    let mut desc = vec![page.title, cur_section];
+                    if let Some(note) = notes_for_item.get(&item_idx) {
+                        desc.push(*note);
+                    }
+
+                    if let Some(rank) = evaluate_item_rank(q, en_label, key_or_cmd, &i18n, &desc) {
+                        hits.push(SearchHit {
+                            page_id: page.id,
+                            page_title: page.title,
+                            section_title: cur_section,
+                            item: *item,
+                            rank,
+                            page_index: page_idx,
+                            item_index: item_idx,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    hits.sort_by_key(|h| (h.rank, h.page_index, h.item_index));
+    hits
+}
+
+/// One item row in a page or search result list.
+fn single_item_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, item: &Item, cur: &Value, t: &Tokens, acts: &mut Vec<Act>) {
     let get = |key: &str| cur.pointer(&format!("/{}", key.replace('.', "/"))).cloned().unwrap_or(Value::Null);
     let label_w = 250.0;
-    for item in &page.items {
-        match *item {
-            Item::Section(title) => {
-                ui.add_space(6.0);
-                ui.label(RichText::new(tr(title)).font(Tokens::semibold(12.5)).color(t.tab_text_active));
-                ui.separator();
-            }
+    match *item {
+        Item::Section(title) => {
+            ui.add_space(6.0);
+            ui.label(RichText::new(tr(title)).font(Tokens::semibold(12.5)).color(t.tab_text_active));
+            ui.separator();
+        }
             Item::Note(text) => {
                 ui.label(RichText::new(tr(text)).color(t.text_dim));
             }
@@ -209,6 +415,12 @@ fn page_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, page: &Page, cur: &Value
                 }
             }
         }
+    }
+
+/// One page's rows.
+fn page_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, page: &Page, cur: &Value, t: &Tokens, acts: &mut Vec<Act>) {
+    for item in &page.items {
+        single_item_ui(app, ui, item, cur, t, acts);
     }
 }
 
@@ -595,6 +807,10 @@ fn labels_ui(app: &mut EffectcraftApp, ui: &mut egui::Ui, cur: &Value, acts: &mu
 pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
     let all = pages();
     let mut page = app.dialog_state.settings_page.clone();
+    let mut search = app.dialog_state.settings_search.clone();
+    let hits = search_settings(&all, &search);
+    let searching = !search.trim().is_empty();
+
     if !all.iter().any(|p| p.id == page) {
         page = "general".into();
     }
@@ -606,13 +822,52 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         let body_h = (ctx.content_rect().height() - 170.0).clamp(120.0, 470.0);
         ui.allocate_ui_with_layout(vec2(ui.available_width(), body_h), egui::Layout::left_to_right(egui::Align::Min), |ui| {
             ui.set_height(body_h);
-            // Page list (left, like After Effects).
+            // Page list (left, like After Effects) with sticky search input at the top.
             ui.vertical(|ui| {
                 ui.set_width(180.0);
-                egui::ScrollArea::vertical().id_salt("settings-pages").max_height(body_h).auto_shrink([false, false]).show(ui, |ui| {
+
+                // Sticky search input: stays visible even when page list scrolls
+                ui.horizontal(|ui| {
+                    let has_text = !search.is_empty();
+                    let edit_w = if has_text { 146.0 } else { 172.0 };
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut search)
+                            .desired_width(edit_w)
+                            .hint_text(tr("Search..."))
+                    );
+                    reg(app, "settings.search", &r, "Search");
+                    if has_text {
+                        let clear_btn = ui.small_button("×");
+                        reg(app, "settings.search_clear", &clear_btn, "Clear Search");
+                        if clear_btn.clicked() {
+                            search.clear();
+                        }
+                    }
+                });
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(2.0);
+
+                let list_h = (body_h - 36.0).max(60.0);
+                egui::ScrollArea::vertical().id_salt("settings-pages").max_height(list_h).auto_shrink([false, false]).show(ui, |ui| {
+                    if searching {
+                        let (r, resp) = ui.allocate_exact_size(vec2(176.0, 24.0), egui::Sense::hover());
+                        ui.painter().rect_filled(r, 3.0, t.accent);
+                        ui.painter().text(
+                            r.left_center() + vec2(10.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            format!("🔍 {} ({})", tr("Results"), hits.len()),
+                            Tokens::ui(12.5),
+                            Color32::WHITE,
+                        );
+                        reg(app, "settings.page.search_results", &resp, "Search Results");
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                    }
                     for p in &all {
                         let (r, resp) = ui.allocate_exact_size(vec2(176.0, 24.0), egui::Sense::click());
-                        let sel = page == p.id;
+                        let sel = !searching && page == p.id;
                         if sel {
                             ui.painter().rect_filled(r, 3.0, t.accent);
                         } else if resp.hovered() {
@@ -627,6 +882,7 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                         );
                         app.auto.add(&format!("settings.page.{}", p.id), r, p.title);
                         if resp.clicked() {
+                            search.clear();
                             page = p.id.to_string();
                         }
                     }
@@ -637,23 +893,68 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                 // The rest of the dialog's width: a fixed width ran past it, so the whole
                 // dialog scrolled sideways a little (#284).
                 ui.set_width(ui.available_width());
-                let p = &all[idx];
-                ui.label(RichText::new(tr(p.title)).font(Tokens::semibold(14.0)).color(t.tab_text_active));
-                ui.add_space(6.0);
-                egui::ScrollArea::vertical().max_height(body_h - 30.0).auto_shrink([false, false]).show(ui, |ui| {
-                    page_ui(app, ui, p, &cur, t, &mut acts);
-                });
+                if searching {
+                    // Separate Result List!
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(tr("Search Results")).font(Tokens::semibold(14.0)).color(t.tab_text_active));
+                        ui.add_space(8.0);
+                        let count = hits.len();
+                        let count_str = if count == 0 {
+                            tr("No matching settings").to_string()
+                        } else if count == 1 {
+                            tr("1 setting found").to_string()
+                        } else {
+                            tr_args("{} settings found", &[&count])
+                        };
+                        ui.label(RichText::new(count_str).small().color(t.text_dim));
+                    });
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical().id_salt("settings-search-scroll").max_height(body_h - 30.0).auto_shrink([false, false]).show(ui, |ui| {
+                        if hits.is_empty() {
+                            ui.add_space(40.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(RichText::new(tr("No settings match your search.")).color(t.text_dim));
+                                ui.add_space(10.0);
+                                if ui.button(tr("Clear Search")).clicked() {
+                                    search.clear();
+                                }
+                            });
+                        } else {
+                            for (hit_i, hit) in hits.iter().enumerate() {
+                                if hit_i > 0 {
+                                    ui.add_space(6.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+                                }
+                                ui.horizontal(|ui| {
+                                    let breadcrumb = format!("{} ▸ {}", tr(hit.page_title), tr(hit.section_title));
+                                    ui.label(RichText::new(breadcrumb).small().color(t.accent));
+                                });
+                                ui.add_space(2.0);
+                                single_item_ui(app, ui, &hit.item, &cur, t, &mut acts);
+                            }
+                            ui.add_space(10.0);
+                        }
+                    });
+                } else {
+                    let p = &all[idx];
+                    ui.label(RichText::new(tr(p.title)).font(Tokens::semibold(14.0)).color(t.tab_text_active));
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical().max_height(body_h - 30.0).auto_shrink([false, false]).show(ui, |ui| {
+                        page_ui(app, ui, p, &cur, t, &mut acts);
+                    });
+                }
             });
         });
         ui.add_space(8.0);
         ui.separator();
         ui.horizontal(|ui| {
-            let r = ui.add_enabled(idx > 0, egui::Button::new(tr("Previous")));
+            let r = ui.add_enabled(!searching && idx > 0, egui::Button::new(tr("Previous")));
             app.auto.add("settings.previous", r.rect, "Previous");
             if r.clicked() {
                 page = all[idx - 1].id.to_string();
             }
-            let r = ui.add_enabled(idx + 1 < all.len(), egui::Button::new(tr("Next")));
+            let r = ui.add_enabled(!searching && idx + 1 < all.len(), egui::Button::new(tr("Next")));
             app.auto.add("settings.next", r.rect, "Next");
             if r.clicked() {
                 page = all[idx + 1].id.to_string();
@@ -669,6 +970,7 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         });
     });
     app.dialog_state.settings_page = page;
+    app.dialog_state.settings_search = search;
     for a in acts {
         match a {
             Act::Set(k, v) => {
@@ -792,3 +1094,53 @@ pub fn recovery(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         app.ui.status = e;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn word_boundary_matching() {
+        assert!(matches_word_boundary("Levels of Undo", "undo"));
+        assert!(matches_word_boundary("Levels of Undo", "levels"));
+        assert!(matches_word_boundary("Levels of Undo", "of"));
+        assert!(matches_word_boundary("undoLevels", "levels"));
+        assert!(matches_word_boundary("general.undoLevels", "undo"));
+        assert!(!matches_word_boundary("Blaundo", "undo"));
+    }
+
+    #[test]
+    fn item_rank_hierarchy() {
+        // 1. Prefix beats word boundary beats substring
+        let rank_prefix = evaluate_item_rank("undo", "Undo Levels", "", &[], &[]).unwrap();
+        let rank_word = evaluate_item_rank("undo", "Levels of Undo", "", &[], &[]).unwrap();
+        let rank_sub = evaluate_item_rank("undo", "Soundtrack", "", &[], &[]).unwrap();
+        assert_eq!(rank_prefix, ItemRank::EnLabelPrefix);
+        assert_eq!(rank_word, ItemRank::EnLabelWord);
+        assert_eq!(rank_sub, ItemRank::EnLabelSubstring);
+        assert!(rank_prefix < rank_word);
+        assert!(rank_word < rank_sub);
+
+        // 2. English beats translations beats description
+        let rank_en = evaluate_item_rank("auto", "Auto-Save", "", &[], &[]).unwrap();
+        let rank_i18n = evaluate_item_rank("auto", "Speichern", "", &["Auto-Save translated"], &[]).unwrap();
+        let rank_desc = evaluate_item_rank("auto", "Projects", "", &[], &["Auto-Save section"]).unwrap();
+        assert_eq!(rank_en, ItemRank::EnLabelPrefix);
+        assert_eq!(rank_i18n, ItemRank::I18nLabelPrefix);
+        assert_eq!(rank_desc, ItemRank::DescPrefix);
+        assert!(rank_en < rank_i18n);
+        assert!(rank_i18n < rank_desc);
+    }
+
+    #[test]
+    fn settings_search_returns_ranked_hits() {
+        let pages = pages();
+        let hits = search_settings(&pages, "undo");
+        assert!(!hits.is_empty(), "finds undo setting");
+        assert!(hits.iter().any(|h| match h.item {
+            Item::Setting { key, .. } => key == "general.undoLevels",
+            _ => false,
+        }));
+    }
+}
+

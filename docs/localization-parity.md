@@ -19,7 +19,7 @@ interface; Arabic and Hebrew text *in layers* is supported through its Middle Ea
 - **Menus:** `crates/ui-egui/src/i18n.rs`, one catalog per language keyed by
   `(command, English label)`. A test (`every_translation_key_exists_in_the_actual_menu_tree`)
   fails if any fixed menu entry is untranslated or a row is stale, so every catalog covers all
-  **618** fixed entries. The generated Effect menu (effect names) is deliberately left in English.
+  **619** fixed entries. The generated Effect menu (effect names) is deliberately left in English.
 - **Panels, dialogs, buttons, tooltips:** `crates/ui-egui/src/i18n/ui.rs`, keyed by the English
   source string, with English fallback. Catalogs exist for Japanese, Simplified and Traditional
   Chinese and Ukrainian.

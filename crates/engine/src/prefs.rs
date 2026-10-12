@@ -110,6 +110,8 @@ page!(General {
     sync_time_related_items: bool = true,
     expression_pick_whip_compact: bool = true,
     create_split_layers_above: bool = false,
+    /// Automatically Check for Updates on Startup.
+    check_updates_on_startup: bool = true,
     use_system_color_picker: bool = false,
     /// Number of projects in File ▸ Open Recent.
     recent_items: u32 = 10,
@@ -1087,6 +1089,7 @@ pub fn pages() -> Vec<Page> {
                 s("general.syncTimeRelatedItems", "Synchronize Time of All Related Items", B, true),
                 s("general.expressionPickWhipCompact", "Expression Pick Whip Writes Compact English", B, true),
                 s("general.createSplitLayersAbove", "Create Split Layers Above Original Layer", B, true),
+                s("general.checkUpdatesOnStartup", "Automatically Check for Updates on Startup", B, true),
                 s("general.useSystemColorPicker", "Use System Color Picker", B, false),
                 Note("EffectCraft always uses its own colour picker (the same on every platform and the web)."),
             ],

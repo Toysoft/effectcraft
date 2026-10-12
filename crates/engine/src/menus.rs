@@ -1225,6 +1225,8 @@ Help
   EffectCraft Home Page | help.appPage
   EffectCraft on GitHub | help.github
   Open Demo Project | file.openDemoProject
+  ---
+  Check for Updates... | help.checkUpdates
   [!mac] ---
   [!mac] About EffectCraft... | app.about
 "#;

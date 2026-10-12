@@ -5,7 +5,9 @@
 EffectCraft ▸ Settings (macOS) or Edit ▸ Preferences (Windows/Linux), `Cmd+Alt+;`. The dialog has
 After Effects 2026's pages (General, Startup & Repair, Project, Composition, Previews, Appearance,
 Grids & Guides, Labels, Type, Import, Export, Audio, Disk, Memory & CPU, Video, 3D, Scripting &
-Expressions) with OK, Cancel, Previous and Next. Older page names still open the right page
+Expressions) with OK, Cancel, Previous and Next. A sticky search field at the top of the category
+list dynamically searches settings across all pages with ranked results (exact prefix, word boundaries,
+substrings, English labels, translations and descriptions) in a dedicated result view. Older page names still open the right page
 (`prefs.open {"page": "Auto-Save"}` opens Project, `Media & Disk Cache` opens Disk, `Memory &
 Performance` opens Memory & CPU).
 
@@ -36,6 +38,7 @@ Commands (CLI, MCP, control channel):
 - `general.showToolTips`: Show Tool Tips
 - `general.createLayersAtCompStart`: Create Layers at Composition Start Time
 - `general.defaultSpatialLinear`: Default Spatial Interpolation to Linear
+- `general.checkUpdatesOnStartup`: Automatically Check for Updates on Startup
 - `startup.showHomeOnLaunch`: Show Home Screen When Launching
 - `startup.offerCrashRecovery`: Offer to Open the Latest Auto-Save After a Crash
 - `startup.windowGraphics`: Window Graphics (`auto` / `gl`), what the desktop window draws with from the next launch. `auto` lets the platform pick (DirectX 12, Vulkan or Metal); `gl` uses OpenGL, with CPU compositing, for graphics drivers that crash with the others. A launch leaves a `launch-pending` marker in the settings folder until its window has been drawing for a few seconds (or the app quits normally before that); a launch that stops earlier (a graphics driver crashing as the window opens or as its surface is re-created) leaves the marker behind, and the next launch switches to `gl` and says so (not on macOS, which has no OpenGL backend). `WGPU_BACKEND` overrides both.
