@@ -102,7 +102,7 @@ Points are logical window coordinates. A target is `{id}` (the element's centre;
 | `ui.click` | `{id \| x,y, button?: left\|right\|middle, count?, modifiers?}` |
 | `ui.move` | `{id \| x,y}` |
 | `ui.drag` | `{from: target, to: target, steps? (12), modifiers?}`: press, move, release |
-| `ui.scroll` | `{id \| x,y, dx, dy}` |
+| `ui.scroll` | `{id \| x,y, dx?, dy?, unit?: point\|line, pinch?, modifiers?}`: `point` (default) is a trackpad scroll (pans the viewers), `line` a mouse wheel (zooms them); `pinch` is a trackpad pinch's zoom factor |
 | `ui.key` | `{key}`, for example `Space`, `F9`, `Cmd+Z`, `Cmd+Shift+Z`, `PageDown`, `Escape` |
 | `ui.type` | `{text}`: text input into the focused field |
 

@@ -131,6 +131,39 @@ pub(crate) fn space_hand(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.key_down(egui::Key::Space)) && !ctx.egui_wants_keyboard_input()
 }
 
+/// What a scroll gesture over a viewer (Composition, Layer) does this frame.
+pub(crate) struct ViewerScroll {
+    /// Points to pan by: a two-finger trackpad scroll.
+    pub pan: egui::Vec2,
+    /// Factor to zoom by around the pointer: a pinch, Ctrl/Cmd+scroll, a mouse wheel, or
+    /// Alt + a trackpad scroll.
+    pub zoom: f32,
+}
+
+/// Splits the frame's scroll input into a viewer pan and a zoom. A trackpad (and other
+/// pixel-precise devices) scrolls in points and pans; a mouse wheel scrolls in lines and zooms.
+pub(crate) fn viewer_scroll(ctx: &egui::Context) -> ViewerScroll {
+    let id = egui::Id::new("viewer-scroll-precise");
+    // The scroll is smoothed over the frames after its event, so the device is remembered.
+    let unit = ctx.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            egui::Event::MouseWheel { unit, .. } => Some(*unit == egui::MouseWheelUnit::Point),
+            _ => None,
+        })
+    });
+    let precise = match unit {
+        Some(p) => {
+            ctx.data_mut(|d| d.insert_temp(id, p));
+            p
+        }
+        None => ctx.data(|d| d.get_temp(id)).unwrap_or(false),
+    };
+    let (scroll, pinch, alt) = ctx.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.alt));
+    let pinch = if pinch.is_finite() && pinch > 0.0 { pinch } else { 1.0 };
+    let scroll = if scroll.x.is_finite() && scroll.y.is_finite() { scroll } else { egui::Vec2::ZERO };
+    if precise && !alt { ViewerScroll { pan: scroll, zoom: pinch } } else { ViewerScroll { pan: egui::Vec2::ZERO, zoom: pinch * (scroll.y / 300.0).exp() } }
+}
+
 pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect) {
     match p {
         PanelKind::Composition => viewers::show(app, ui, 0, rect),
