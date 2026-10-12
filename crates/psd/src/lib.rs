@@ -132,7 +132,7 @@ fn inflate(src: &[u8], limit: usize) -> Result<Vec<u8>> {
 
 /// Give back what a channel buffer from `Psd::channel_bytes` / `Psd::decode_plane` was charged:
 /// a borrowed one (uncompressed data, or a plane of an inflated stream charged as a whole) was not.
-fn release_bytes(budget: &mut Budget, raw: &Cow<'_, [u8]>) {
+fn release_bytes(budget: &mut Budget, raw: Cow<'_, [u8]>) {
     if let Cow::Owned(v) = raw {
         budget.release(v.len() as u64);
     }
@@ -1036,7 +1036,7 @@ impl Psd {
                 *o = v;
             }
         });
-        release_bytes(budget, &raw);
+        release_bytes(budget, raw);
         Ok(out)
     }
 
@@ -1183,7 +1183,7 @@ impl Psd {
         for c in 0..want {
             let raw = self.decode_plane(comp, &mut stream, &mut r, c, w, h, &mut budget)?;
             self.store_merged_channel(c, &raw, &mut data, &mut black);
-            release_bytes(&mut budget, &raw);
+            release_bytes(&mut budget, raw);
         }
         for (i, p) in data.iter_mut().enumerate() {
             let k = black.as_ref().and_then(|k| k.get(i)).copied().unwrap_or(0.0);
@@ -1302,7 +1302,7 @@ impl Psd {
                                     sy += 1;
                                 }
                             });
-                            release_bytes(&mut budget, &raw);
+                            release_bytes(&mut budget, raw);
                         }
                     }
                     for y in ys {
