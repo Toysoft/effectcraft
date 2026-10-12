@@ -215,16 +215,15 @@ pub fn open_form(app: &mut EffectcraftApp, id: &str, p: &Value) -> bool {
     let lt = layer.map(|l| l.layer_time(t)).unwrap_or(t);
     let base = p.clone();
     let (title, fields): (String, Vec<Field>) = match id {
-        // Photoshop files: Import Kind (Footage / Composition / – Retain Layer Sizes).
-        "file.import" if !has(p, &["importAs"]) && is_layered(p) => (
-            "Import Photoshop File".into(),
-            vec![Field::choice(
-                "importAs",
-                "Import Kind",
-                &[("Footage", json!("footage")), ("Composition", json!("composition")), ("Composition - Retain Layer Sizes", json!("compositionLayerSizes"))],
-                1,
-            )],
-        ),
+        // Photoshop files: Import Kind (Footage / Composition / – Retain Layer Sizes). Dropped
+        // files start at Settings ▸ Import ▸ Default Drag Import As.
+        "file.import" if !has(p, &["importAs"]) && is_layered(p) => {
+            let kinds =
+                [("Footage", json!("footage")), ("Composition", json!("composition")), ("Composition - Retain Layer Sizes", json!("compositionLayerSizes"))];
+            let drag = p.get("drag").and_then(Value::as_bool).unwrap_or(false);
+            let sel = if drag { kinds.iter().position(|(_, v)| v.as_str() == Some(s.prefs.drag_import_as())).unwrap_or(0) } else { 1 };
+            ("Import Photoshop File".into(), vec![Field::choice("importAs", "Import Kind", &kinds, sel)])
+        }
         // PDF / Illustrator files: Import Kind and the page.
         "file.import" if !has(p, &["importAs", "page"]) && is_pdf(p) => (
             "Import PDF / Illustrator File".into(),

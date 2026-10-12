@@ -127,6 +127,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("window.dockPanel", "Dock Panel", [], None),
     uic!("window.floatPanel", "Undock Panel", [], None),
     uic!("window.closePanel", "Close Panel", [], None),
+    uic!("window.panelWindow", "Move Panel to New Window", [], None),
 ];
 
 pub fn panel_command_id(p: PanelKind) -> String {
@@ -291,6 +292,15 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             _ => {}
         }
     }
+    // Edit ▸ Paste with SVG markup on the system clipboard pastes it as a shape layer (After
+    // Effects 26.3). Copying in the app replaces the system clipboard with a note naming what
+    // was copied, so SVG there was copied after anything copied in the app.
+    if id == "edit.paste" && no_params(&params) && app.session.state.text_edit.is_none() {
+        let text = ctx.data_mut(|d| d.remove_temp::<String>(system_paste_id())).or_else(|| app.hooks.clipboard_text.as_ref().and_then(|f| f()));
+        if let Some(svg) = text.filter(|t| effectcraft_engine::vector::is_svg_text(t)) {
+            return run_engine(app, ctx, "edit.pasteSvg", json!({"svg": svg}));
+        }
+    }
     // Clear follows panel focus, including the Edit menu and keyboard shortcut.
     if id == "edit.clear" && params.as_object().is_some_and(|p| p.is_empty()) && app.ui.focused == PanelKind::Project {
         // Through `invoke`, so deleting items that compositions use still asks first (M3.16).
@@ -442,6 +452,22 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
         }
         return Ok(Value::Null);
     }
+    // Multiple monitors: {panel, window?: bool} moves a panel into its own native window (or
+    // back into the main window; no `window` toggles).
+    if id == "window.panelWindow" {
+        // A panel name ("Info", "Effect Controls") or its serialized form ({"Viewer": 2}).
+        let value = params.get("panel").ok_or("panelWindow: need `panel`")?;
+        let panel = match value.as_str() {
+            Some(name) => PanelKind::from_name(name).ok_or(format!("unknown panel `{name}`"))?,
+            None => serde_json::from_value::<PanelKind>(value.clone()).map_err(|_| "panelWindow: unknown `panel`".to_string())?,
+        };
+        let window = match params.get("window") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(value.as_bool().ok_or("panelWindow: `window` must be true or false")?),
+        };
+        let window = app.set_panel_window(ctx, panel, window)?;
+        return Ok(json!({"window": window}));
+    }
     // A UI-only command (not in the engine's menus), so `frontend` gets it from here.
     if id == "window.maximizeApp" {
         return frontend(app, ctx, id, params);
@@ -525,9 +551,20 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             app.stop();
             return Ok(Value::Null);
         }
+        // The focused Layer panel has its own magnification; otherwise the Composition viewer.
+        "view.fit" if app.ui.focused == PanelKind::Layer => {
+            app.ui.layer_zoom = None;
+            app.ui.layer_pan = [0.0, 0.0];
+            return Ok(Value::Null);
+        }
         "view.fit" => {
             app.ui.viewer.zoom = None;
             app.ui.viewer.pan = [0.0, 0.0];
+            return Ok(Value::Null);
+        }
+        "view.actualSize" if app.ui.focused == PanelKind::Layer => {
+            app.ui.layer_zoom = Some(1.0 / ctx.pixels_per_point());
+            app.ui.layer_pan = [0.0, 0.0];
             return Ok(Value::Null);
         }
         "view.actualSize" => {
@@ -737,6 +774,16 @@ fn toggle(slot: &mut bool, p: &Value) -> Value {
     json!(*slot)
 }
 
+/// The next View ▸ Zoom In / Zoom Out magnification (points per pixel) after `cur`.
+fn zoom_step(cur: f32, zoom_in: bool) -> f32 {
+    const STEPS: [f32; 16] = [0.015, 0.03, 0.0625, 0.125, 0.25, 0.333, 0.5, 0.66, 1.0, 1.5, 2.0, 3.0, 4.0, 8.0, 16.0, 32.0];
+    if zoom_in {
+        STEPS.iter().copied().find(|s| *s > cur + 1e-3).unwrap_or(32.0)
+    } else {
+        STEPS.iter().rev().copied().find(|s| *s < cur - 1e-3).unwrap_or(0.015)
+    }
+}
+
 /// Perform a frontend command (from `Event::Frontend`).
 pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Value) -> Result<Value, String> {
     let now = ctx.input(|i| i.time);
@@ -758,6 +805,8 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
         "view.newViewer" => json!({"viewer": crate::panels::viewers::new_viewer(app)}),
         // Run by id (control channel, MCP): the Project panel's selection, whatever has focus.
         "project.deleteWithoutConfirmation" => crate::panels::delete_items::delete_confirmed(app, ctx, json!({}))?,
+        // A gradient property's "Edit Gradient…" (the Timeline's value): the Gradient Editor.
+        "prop.editGradient" => crate::panels::gradient_editor::open(app, &p)?,
         "window.scriptPanel" => {
             let id = p.get("window").and_then(Value::as_u64).ok_or("no ScriptUI panel window")? as u32;
             app.show_panel(PanelKind::ScriptPanel(id));
@@ -773,12 +822,12 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             Value::Null
         }
         "app.gpuInfo" => {
-            let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
             crate::panels::dialogs::info(
                 app,
                 "GPU Information",
                 &format!(
-                    "Compositing: CPU, {threads} threads (pure Rust, rayon).\nDisplay: egui on wgpu.\nLayer cache: {} MB  •  Preview cache: {} MB.",
+                    "{}Layer cache: {} MB  •  Preview cache: {} MB.",
+                    effectcraft_engine::sysinfo::gpu_summary(&app.session),
                     app.session.layer_cache.budget() >> 20,
                     app.frames.budget() >> 20
                 ),
@@ -859,14 +908,17 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
             }
             r
         }
+        // Zoom In / Zoom Out act on the focused viewer: the Layer panel when it has focus, else
+        // the Composition viewer.
+        "view.zoomIn" | "view.zoomOut" if app.ui.focused == PanelKind::Layer => {
+            let cur = app.ui.layer_zoom.unwrap_or_else(|| crate::panels::layer_panel::last_fit(ctx));
+            let next = zoom_step(cur, id == "view.zoomIn");
+            app.ui.layer_zoom = Some(next);
+            json!({"zoom": next, "panel": "layer"})
+        }
         "view.zoomIn" | "view.zoomOut" => {
             let cur = v.zoom.unwrap_or_else(|| crate::panels::viewer::last_fit(ctx));
-            const STEPS: [f32; 16] = [0.015, 0.03, 0.0625, 0.125, 0.25, 0.333, 0.5, 0.66, 1.0, 1.5, 2.0, 3.0, 4.0, 8.0, 16.0, 32.0];
-            let next = if id == "view.zoomIn" {
-                STEPS.iter().copied().find(|s| *s > cur + 1e-3).unwrap_or(32.0)
-            } else {
-                STEPS.iter().rev().copied().find(|s| *s < cur - 1e-3).unwrap_or(0.015)
-            };
+            let next = zoom_step(cur, id == "view.zoomIn");
             v.zoom = Some(next);
             json!({"zoom": next})
         }
@@ -1085,6 +1137,11 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
         }
         "layer.openLayer" => {
             let id = p.get("layer").and_then(Value::as_u64).or_else(|| app.session.state.selected_layers.first().map(|l| l.0));
+            // Another layer opens at Fit.
+            if id != app.ui.layer_panel {
+                app.ui.layer_zoom = None;
+                app.ui.layer_pan = [0.0, 0.0];
+            }
             app.ui.layer_panel = id;
             app.ui.layer_view = None;
             app.show_panel(PanelKind::Layer);
@@ -1213,7 +1270,7 @@ fn file_dialog(app: &mut EffectcraftApp, id: &str, params: &Value) -> Option<Res
         "keys.rpfCameraImport" => ("path", Ask::Open(&["json", "csv", "txt"])),
         "essential.exportTemplate" => ("path", Ask::Save("Template.ectemplate")),
         "essential.importTemplate" => ("path", Ask::Open(&["ectemplate"])),
-        "file.setProxy" => ("path", Ask::Open(&["mp4", "mov", "m4v", "mkv", "webm", "png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "bmp", "exr"])),
+        "file.setProxy" => ("path", Ask::Open(&["mp4", "mov", "m4v", "mkv", "webm", "mxf", "png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "bmp", "exr"])),
         _ => return None,
     };
     if params.get(key).is_some()
@@ -1225,8 +1282,8 @@ fn file_dialog(app: &mut EffectcraftApp, id: &str, params: &Value) -> Option<Res
         return None;
     }
     const MEDIA: &[&str] = &[
-        "mp4", "mov", "m4v", "mkv", "webm", "png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "bmp", "exr", "wav", "aif", "aiff", "mp3", "flac", "ogg",
-        "opus", "svg", "pdf", "ai", "eps", "psd", "psb", "gltf", "glb", "obj", "json", "csv", "tsv",
+        "mp4", "mov", "m4v", "mkv", "webm", "mxf", "png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "bmp", "exr", "dpx", "cin", "wav", "aif", "aiff", "mp3",
+        "flac", "ogg", "opus", "svg", "pdf", "ai", "eps", "psd", "psb", "tga", "hdr", "gltf", "glb", "obj", "stl", "fbx", "json", "csv", "tsv",
     ];
     // A host whose modal dialogs would run a nested event loop inside this frame (macOS: a
     // drag over the window then re-entered winit's event handler and aborted, #511) shows the
@@ -1561,6 +1618,11 @@ fn mods_match(want: egui::Modifiers, got: egui::Modifiers) -> bool {
 
 /// Set (egui temp data) from a plain Spacebar press until its release while a tap would still
 /// run the Spacebar shortcut.
+/// The system clipboard's text of this frame's paste event, for the Edit ▸ Paste it runs.
+fn system_paste_id() -> egui::Id {
+    egui::Id::new("menus-system-paste")
+}
+
 fn space_tap_id() -> egui::Id {
     egui::Id::new("spacebar-tap")
 }
@@ -1606,7 +1668,8 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
     let start = modifiers_at_start(ctx);
     // Dialog cancellation owns Escape even when a text field has keyboard focus.
     if !tab_only && app.dialog.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        if crate::panels::shortcut_editor::recording(app) || egui::Popup::is_any_open(ctx) {
+        // A popup or colour picker takes Escape first (the picker goes back to its original colour).
+        if crate::panels::shortcut_editor::recording(app) || egui::Popup::is_any_open(ctx) || crate::color_picker::open_recently(ctx) {
             return;
         }
         ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
@@ -1641,6 +1704,9 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
     // Text editing in the viewer takes the clipboard events itself.
     let clipboard = app.session.state.text_edit.is_none();
     let project = app.ui.focused == PanelKind::Project;
+    // The paste event's text: Edit ▸ Paste pastes SVG markup as a shape layer.
+    let pasted =
+        if clipboard { ctx.input(|i| i.events.iter().rev().find_map(|e| if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None })) } else { None };
     let mut events: Vec<(egui::Key, egui::Modifiers, bool)> = ctx.input(|i| {
         // The windowing layer turns Ctrl+C / Ctrl+X / Ctrl+V into clipboard events instead of
         // key presses: map them back to the keys (with the modifiers held) so Edit ▸ Copy, Cut,
@@ -1756,9 +1822,15 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
         }
         if let Some((_, _, id, params)) = binds.iter().find(|(m, k, ..)| *k == key && mods_match(*m, mods)) {
             let (id, params) = (id.clone(), if params.is_null() { json!({}) } else { params.clone() });
+            if id == "edit.paste"
+                && let Some(t) = &pasted
+            {
+                ctx.data_mut(|d| d.insert_temp(system_paste_id(), t.clone()));
+            }
             if let Err(e) = invoke(app, ctx, &id, params) {
                 app.ui.status = e;
             }
+            ctx.data_mut(|d| d.remove_temp::<String>(system_paste_id()));
         }
     }
 }
@@ -1770,7 +1842,7 @@ pub fn menu_bar(app: &mut EffectcraftApp, ui: &mut egui::Ui) {
     let mut nav = crate::menu_keys::Nav::default();
     ui.horizontal_centered(|ui| {
         ui.add_space(6.0);
-        egui::MenuBar::new().ui(ui, |ui| {
+        egui::MenuBar::new().config(egui::containers::menu::MenuConfig::new().style(crate::widgets::menu_style)).ui(ui, |ui| {
             for node in effectcraft_engine::menus::menu_bar() {
                 if let MenuNode::Submenu { label, children } = node {
                     let r = ui.menu_button(crate::i18n::label(app, "", label), |ui| {

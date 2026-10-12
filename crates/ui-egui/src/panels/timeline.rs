@@ -488,6 +488,21 @@ impl TMap {
     }
 }
 
+/// A Timeline ruler tick label for comp frame `fno`: seconds:frames (`00:15f`, AE) or, when
+/// the project's Time Display Style is Frames, the frame number the current-time display shows
+/// (`00015`, counted from Start Numbering Frames At) (#710).
+fn ruler_label(fno: i64, fps_i: i64, settings: &effectcraft_engine::project::ProjectSettings) -> String {
+    if settings.time_display == effectcraft_engine::project::TimeDisplayStyle::Frames {
+        return format!("{:05}", fno.saturating_add(settings.frame_start));
+    }
+    let fps_i = fps_i.max(1);
+    if fno >= 60 * fps_i * 60 {
+        format!("{}:{:02}:{:02}f", fno / (fps_i * 60), (fno / fps_i) % 60, fno % fps_i)
+    } else {
+        format!("{:02}:{:02}f", fno / fps_i, fno % fps_i)
+    }
+}
+
 fn tl_map_id() -> egui::Id {
     egui::Id::new("timeline-map")
 }
@@ -1404,7 +1419,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let bresp = ui.interact(bar, egui::Id::new("wa-bar"), Sense::click_and_drag());
     app.auto.add("timeline.workArea.bar", bar, "Work area");
     // Right-click: the work area's commands (After Effects).
-    bresp.context_menu(|ui| {
+    crate::widgets::context_menu(&bresp, |ui| {
         let mut chosen = None;
         for id in ["comp.trimToWorkArea", "edit.liftWorkArea", "edit.extractWorkArea"] {
             crate::menus::entry_for(app, ui, id, &mut chosen);
@@ -1513,11 +1528,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let x = tm.x(s);
         pr.line_segment([pos2(x, ruler.max.y - 10.0), pos2(x, ruler.max.y)], Stroke::new(1.0, t.tl_ruler_tick));
         let fno = (s / fd).round() as i64;
-        let label = if fno >= 60 * fps_i * 60 {
-            format!("{}:{:02}:{:02}f", fno / (fps_i * 60), (fno / fps_i) % 60, fno % fps_i)
-        } else {
-            format!("{:02}:{:02}f", fno / fps_i, fno % fps_i)
-        };
+        let label = ruler_label(fno, fps_i, &app.session.project.settings);
         pr.text(pos2(x + 3.0, ruler.max.y - 16.0), Align2::LEFT_CENTER, label, Tokens::ui(10.0), t.tl_ruler_text);
         for k in 1..5 {
             let xx = tm.x(s + secs_per_label * k as f64 / 5.0);
@@ -1651,7 +1662,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let under = hresp.interact_pointer_pos().and_then(|pt| column_at(&cw, pt.x));
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("tl-colhdr-under"), under.unwrap_or("")));
     }
-    hresp.context_menu(|ui| {
+    crate::widgets::context_menu(&hresp, |ui| {
         let under: &str = ctx.data(|d| d.get_temp(egui::Id::new("tl-colhdr-under"))).unwrap_or("");
         if !under.is_empty() && under != "name" && ui.button(crate::i18n::tr("Hide This")).clicked() {
             actions.push(("timeline.column".into(), json!({"column": under, "visible": false})));
@@ -2312,7 +2323,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 lp.text(lang_r.center(), Align2::CENTER_CENTER, "f", Tokens::semibold(10.0), if lang.hovered() { t.text } else { t.text_dim });
                 app.auto.add(&format!("timeline.prop.{uid}.exprLanguage"), lang_r, "Expression Language Menu");
                 let mut picked: Option<&'static str> = None;
-                egui::Popup::menu(&lang).show(|ui| {
+                egui::Popup::menu(&lang).style(crate::widgets::menu_style).show(|ui| {
                     for (cat, items) in effectcraft_engine::commands::expr_tools::language_menu() {
                         ui.menu_button(cat, |ui| {
                             widgets::menu_scroll(ui, |ui| {
@@ -2475,7 +2486,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 if name_resp.clicked() {
                     actions.push(("prop.select".into(), json!({"layer": layer.id.0, "prop": uid, "add": ui.input(|i| i.modifiers.shift)})));
                 }
-                name_resp.context_menu(|ui| prop_menu(ui, &mut app.auto, cid, layer, prop, &mut actions));
+                crate::widgets::context_menu(&name_resp, |ui| prop_menu(ui, &mut app.auto, cid, layer, prop, &mut actions));
                 // Value editors.
                 let value = ectx.value(layer, prop);
                 let vx = (cw.switches + 4.0).max(name_x + 120.0);
@@ -2567,7 +2578,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                                 ui_actions.push(UiAct::SetTime(ct));
                             }
                         }
-                        kresp.context_menu(|ui| {
+                        crate::widgets::context_menu(&kresp, |ui| {
                             for (lbl, cmd, params) in [
                                 ("Edit Value…", "keys.set", json!({"layer": layer.id.0, "prop": uid, "time": k.time.seconds()})),
                                 ("-", "", json!({})),
@@ -2658,7 +2669,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         app.auto.add("timeline.empty", empty_rect, "Right-click to create a layer");
     }
     for (response, area) in [(&outline_empty, "outline"), (&empty, "graph")] {
-        response.context_menu(|ui| {
+        crate::widgets::context_menu(&response, |ui| {
             let menu = ui.menu_button(crate::i18n::tr("New"), |ui| {
                 for (key, label, command, params) in [
                     ("text", "Text", "layer.newText", json!({"text": "Text"})),
@@ -3257,6 +3268,11 @@ const SHAPE_ADD_ITEMS: &[(&str, &str)] = &[
     ("gfill", "Gradient Fill"),
     ("gstroke", "Gradient Stroke"),
     ("-", ""),
+    ("frontColor", "Front: Color"),
+    ("bevelColor", "Bevel: Color"),
+    ("sideColor", "Side: Color"),
+    ("backColor", "Back: Color"),
+    ("-", ""),
     ("merge", "Merge Paths"),
     ("offset", "Offset Paths"),
     ("pucker", "Pucker & Bloat"),
@@ -3443,7 +3459,7 @@ fn prop_menu(
 }
 
 fn layer_context_menu(resp: &egui::Response, layer: &Layer, actions: &mut Vec<(String, serde_json::Value)>) {
-    resp.context_menu(|ui| layer_menu(ui, &[layer.id.0], actions));
+    crate::widgets::context_menu(&resp, |ui| layer_menu(ui, &[layer.id.0], actions));
 }
 
 /// Shared layer actions for Timeline rows and Composition context menus.
@@ -3530,8 +3546,14 @@ fn value_editor(
     // With several layers selected the edit applies to all of them (#491): a scrub by the same
     // change, a typed value as it is.
     let scrub = ui.ctx().dragged_id().is_some() && ui.input(|i| i.pointer.is_decidedly_dragging());
+    // Proportional Scrubbing (After Effects 26.2): Ctrl+Alt (Cmd+Opt) spreads the change over the
+    // selected layers by selection order, the first unchanged and the last by all of it.
+    let proportional = scrub && ui.input(|i| widgets::proportional_scrub(i.modifiers));
     let set = |actions: &mut Vec<(String, serde_json::Value)>, v: serde_json::Value| {
-        actions.push(("prop.set".into(), json!({"layer": layer.id.0, "prop": uid, "value": v, "merge": merge, "selected": true, "offset": scrub})))
+        actions.push((
+            "prop.set".into(),
+            json!({"layer": layer.id.0, "prop": uid, "value": v, "merge": merge, "selected": true, "offset": scrub, "proportional": proportional}),
+        ))
     };
     let is_3d = layer.is_3d();
     let mut x = at.x;
@@ -3586,8 +3608,8 @@ fn value_editor(
                 dims.push(r);
                 if let Some(nv) = nv {
                     let mut nc = c.clone();
-                    // Alt edits one value of a linked pair.
-                    let shown = if linked && !ui.input(|i| i.modifiers.alt) { n.min(c.len()) } else { 1 };
+                    // Alt edits one value of a linked pair (Ctrl+Alt is a proportional scrub).
+                    let shown = if linked && !ui.input(|i| i.modifiers.alt && !widgets::proportional_scrub(i.modifiers)) { n.min(c.len()) } else { 1 };
                     let from = if shown == 1 { d } else { 0 };
                     for (e, v) in widgets::constrained(c.get(from..from + shown).unwrap_or_default(), d - from, nv).into_iter().enumerate() {
                         if let Some(slot) = nc.get_mut(from + e) {
@@ -3671,7 +3693,16 @@ fn value_editor(
             );
         }
         Value::Gradient(_) => {
-            p.text(pos2(x, at.y), Align2::LEFT_CENTER, crate::i18n::tr("Edit Gradient…"), Tokens::ui(12.0), t.hot_text);
+            // Opens the Gradient Editor at the current time (#612).
+            let r = p.text(pos2(x, at.y), Align2::LEFT_CENTER, crate::i18n::tr("Edit Gradient…"), Tokens::ui(12.0), t.hot_text);
+            let resp = ui.interact(r.expand(2.0), egui::Id::new(("gradient-edit", uid)), Sense::click());
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            app.auto.add(&format!("timeline.prop.{uid}.value"), r, &prop.name);
+            if resp.clicked() {
+                actions.push(("prop.editGradient".into(), json!({"layer": layer.id.0, "prop": uid})));
+            }
         }
         Value::Str(s) => {
             p.text(pos2(x, at.y), Align2::LEFT_CENTER, s.chars().take(30).collect::<String>(), Tokens::ui(12.0), t.text_dim);
@@ -3683,6 +3714,23 @@ fn value_editor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #710: with Time Display set to Frames the ruler labels are frame numbers (as under the
+    /// CTI, from Start Numbering Frames At); otherwise seconds:frames.
+    #[test]
+    fn ruler_labels_follow_the_time_display_style() {
+        use effectcraft_engine::project::{ProjectSettings, TimeDisplayStyle};
+        let mut st = ProjectSettings { time_display: TimeDisplayStyle::Timecode, frame_start: 0, ..ProjectSettings::default() };
+        assert_eq!(ruler_label(15, 30, &st), "00:15f");
+        assert_eq!(ruler_label(45, 30, &st), "01:15f");
+        assert_eq!(ruler_label(30 * 3600 + 31, 30, &st), "60:01:01f");
+        st.time_display = TimeDisplayStyle::Frames;
+        assert_eq!(ruler_label(0, 30, &st), "00000");
+        assert_eq!(ruler_label(45, 30, &st), "00045");
+        st.frame_start = 1;
+        assert_eq!(ruler_label(45, 30, &st), "00046");
+        assert_eq!(ruler_label(i64::MAX, 30, &st), format!("{:05}", i64::MAX));
+    }
 
     /// #468: playback pages the view to the CTI; a scrub past either end scrolls that way.
     #[test]
@@ -3857,6 +3905,28 @@ mod tests {
         app.ui.timeline.open_layers.insert(bx);
         let rows = labels(&app);
         assert!(rows.iter().any(|r| r.trim() == ">Transform"), "{rows:?}");
+    }
+
+    /// U and UU show Time Remap on a layer with time remapping enabled.
+    #[test]
+    fn u_and_uu_reveal_time_remap() {
+        let mut s = effectcraft_engine::Session::default();
+        let inner = s.execute("comp.new", json!({"name": "Inner", "width": 32, "height": 32, "duration": 2})).unwrap()["comp"].as_u64().unwrap();
+        s.execute("comp.new", json!({"name": "Main", "width": 64, "height": 64, "duration": 4})).unwrap();
+        let nested = s.execute("layer.addItem", json!({"item": inner})).unwrap()["layer"].as_u64().unwrap();
+        let mut app = EffectcraftApp::new(s);
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "layer.enableTimeRemap", json!({"layers": [nested]})).unwrap();
+        app.session.execute("layer.select", json!({"layers": [nested]})).unwrap();
+        for uu in [false, true] {
+            app.ui.timeline.layer_reveal.clear();
+            app.last_reveal = uu.then(|| ("keyframes".into(), f64::MAX));
+            crate::menus::invoke(&mut app, &ctx, "anim.reveal", json!({"kind": "keyframes"})).unwrap();
+            assert_eq!(app.ui.timeline.layer_reveal.get(&nested), Some(&vec!["props".to_string()]), "UU: {uu}");
+            let rows = labels(&app);
+            let at = rows.iter().position(|r| r == "Inner").unwrap();
+            assert_eq!(rows[at + 1].trim(), "Time Remap", "UU: {uu}: {rows:?}");
+        }
     }
 
     /// Enabling time remapping twirls the layer open on Time Remap (#157); disabling it reveals

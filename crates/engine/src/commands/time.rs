@@ -169,10 +169,10 @@ fn with_to(p: &Value, to: &str) -> Value {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!("time.set", "Go to Time...", ["View"], Some("Alt+Shift+J"), "{time? (s) | frame? | timecode?}", has_comp, set),
-        cmd!("time.nextFrame", "Next Frame", [], Some("PageDown"), "{}", has_comp, |s, _| step(s, &json!({"frames": 1}))),
-        cmd!("time.previousFrame", "Previous Frame", [], Some("PageUp"), "{}", has_comp, |s, _| step(s, &json!({"frames": -1}))),
-        cmd!("time.forward10", "Forward 10 Frames", [], Some("Shift+PageDown"), "{}", has_comp, |s, _| step(s, &json!({"frames": 10}))),
-        cmd!("time.back10", "Back 10 Frames", [], Some("Shift+PageUp"), "{}", has_comp, |s, _| step(s, &json!({"frames": -10}))),
+        cmd!("time.nextFrame", "Next Frame", [], ["PageDown", "Cmd+ArrowRight"], "{}", has_comp, |s, _| step(s, &json!({"frames": 1}))),
+        cmd!("time.previousFrame", "Previous Frame", [], ["PageUp", "Cmd+ArrowLeft"], "{}", has_comp, |s, _| step(s, &json!({"frames": -1}))),
+        cmd!("time.forward10", "Forward 10 Frames", [], ["Shift+PageDown", "Cmd+Shift+ArrowRight"], "{}", has_comp, |s, _| step(s, &json!({"frames": 10}))),
+        cmd!("time.back10", "Back 10 Frames", [], ["Shift+PageUp", "Cmd+Shift+ArrowLeft"], "{}", has_comp, |s, _| step(s, &json!({"frames": -10}))),
         cmd!("time.step", "Step Frames", [], None, "{frames}", has_comp, step),
         cmd!("time.start", "Go to Start", [], Some("Home"), "{}", has_comp, |s, _| go(s, &json!({"to": "start"}))),
         cmd!("time.end", "Go to End", [], Some("End"), "{}", has_comp, |s, _| go(s, &json!({"to": "end"}))),

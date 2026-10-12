@@ -88,7 +88,7 @@ fn prefs_set_validates_keys_types_and_ranges() {
 }
 
 /// Settings ▸ Appearance ▸ UI Scale (#284): a percentage, 100 by default, kept within 75–200;
-/// the dialog's choices set it as a number.
+/// the dialog types or drags any whole percentage in that range (#682).
 #[test]
 fn ui_scale_is_a_percentage_from_75_to_200() {
     let mut p = Prefs::default();
@@ -101,10 +101,8 @@ fn ui_scale_is_a_percentage_from_75_to_200() {
     p.set("appearance.uiScale", json!(10)).unwrap();
     assert_eq!(p.appearance.ui_scale, 75);
     let page = crate::prefs::pages().into_iter().find(|pg| pg.id == "appearance").unwrap();
-    let listed = page.items.iter().any(|i| {
-        matches!(i, crate::prefs::Item::Setting { key: "appearance.uiScale", kind: crate::prefs::Kind::Choice(c), live: true, .. } if c.contains(&("200%", "200")))
-    });
-    assert!(listed, "Settings ▸ Appearance offers it");
+    let field = crate::prefs::Item::Setting { key: "appearance.uiScale", label: "UI Scale", kind: crate::prefs::Kind::Int(75, 200, "%"), live: true };
+    assert!(page.items.contains(&field), "Settings ▸ Appearance offers it");
     // Older settings files without it get the default.
     assert_eq!(Prefs::from_json(r#"{"version": 2, "appearance": {"theme": "light"}}"#).appearance.ui_scale, 100);
 }
@@ -331,6 +329,24 @@ fn defaults_have_no_conflicts_and_match_the_menus() {
     assert_eq!(t.shortcut_of("file.save", &json!(null)), Some("Cmd+S"));
     assert_eq!(t.shortcut_of("app.settings", &json!({"page": "general"})), Some("Cmd+Alt+;"));
     assert!(t.bindables.len() > 500);
+}
+
+/// Cmd+Left / Cmd+Right Arrow step a frame like Page Up / Page Down (Shift: 10 frames).
+#[test]
+fn cmd_arrows_step_frames_like_page_keys() {
+    let s = Session::default();
+    let t = s.shortcuts();
+    for (id, keys) in [
+        ("time.nextFrame", ["PageDown", "Cmd+ArrowRight"]),
+        ("time.previousFrame", ["PageUp", "Cmd+ArrowLeft"]),
+        ("time.forward10", ["Shift+PageDown", "Cmd+Shift+ArrowRight"]),
+        ("time.back10", ["Shift+PageUp", "Cmd+Shift+ArrowLeft"]),
+    ] {
+        assert_eq!(t.keys.get(id).map(Vec::as_slice), Some(keys.map(String::from).as_slice()), "{id}");
+        // The menus and tooltips keep showing the Page key.
+        assert_eq!(t.shortcut_of(id, &json!(null)), Some(keys[0]));
+    }
+    assert!(t.all_conflicts().is_empty(), "{:?}", t.all_conflicts());
 }
 
 #[test]
@@ -655,4 +671,45 @@ fn render_backend_says_why_it_renders_on_the_cpu() {
     s.accel_note = Some("headless: renders on the CPU unless started with --gpu".into());
     assert_eq!(why(&mut s), json!("headless: renders on the CPU unless started with --gpu"));
     assert_eq!(s.execute("render.backend", json!({"backend": "cpu"})).unwrap()["why"], json!("the project's renderer is Mercury Software Only"));
+}
+
+/// Settings ▸ GPU Information names what the GPU compositor runs on, or why it is off, and the
+/// adapter the window got, so a card the compositor couldn't use doesn't look undetected (#596).
+#[test]
+fn gpu_summary_names_the_adapter_or_says_why_there_is_none() {
+    use crate::sysinfo::gpu_summary;
+    use effectcraft_render::{Accelerator, FxStep, Renderer};
+
+    struct Named;
+    impl Accelerator for Named {
+        fn name(&self) -> String {
+            "NVIDIA GeForce RTX 4070 (Vulkan)".into()
+        }
+        fn comp_frame(&self, _: &Renderer, _: crate::project::ItemId, _: effectcraft_time::Tick) -> Option<effectcraft_raster::Image> {
+            None
+        }
+        fn supports_effect(&self, _: &str) -> bool {
+            false
+        }
+        fn effects(&self, _: &[FxStep], _: &effectcraft_effects::Buf, _: Option<f32>) -> Option<effectcraft_effects::Buf> {
+            None
+        }
+    }
+
+    let mut s = Session::default();
+    let off = gpu_summary(&s);
+    assert!(off.contains("Compositing: CPU"), "{off}");
+    assert!(off.contains("GPU compositing is off: no reason was recorded"), "{off}");
+    assert!(off.contains("Window graphics: not known yet"), "{off}");
+
+    s.accel_note = Some("GPU compositor unavailable: no compute shaders".into());
+    s.window_adapter = Some("NVIDIA GeForce RTX 4070 (Dx12, DiscreteGpu)".into());
+    let declined = gpu_summary(&s);
+    assert!(declined.contains("GPU compositing is off: GPU compositor unavailable: no compute shaders"), "{declined}");
+    assert!(declined.contains("Window graphics: NVIDIA GeForce RTX 4070 (Dx12, DiscreteGpu)"), "the card the window got is listed: {declined}");
+
+    s.accel = Some(std::sync::Arc::new(Named));
+    let on = gpu_summary(&s);
+    assert!(on.starts_with("Compositing: GPU, NVIDIA GeForce RTX 4070 (Vulkan)."), "{on}");
+    assert!(!on.contains("compositing is off"), "{on}");
 }

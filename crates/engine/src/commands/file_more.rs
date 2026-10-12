@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use effectcraft_color::Label;
-use effectcraft_project::{AlphaMode, Comp, Footage, FootageKind, ItemId, ItemKind, LayerSource, Project, Solid};
+use effectcraft_project::{AlphaMode, Comp, Footage, FootageKind, ItemId, ItemKind, LayerSource, Project, Solid, limits};
 use effectcraft_time::{FrameRate, Tick};
 use serde_json::{Value, json};
 
@@ -84,12 +84,12 @@ fn save_copy(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn rate_of(p: &Value) -> FrameRate {
-    f_p(p, "frameRate").map(FrameRate::from_f64).unwrap_or(FrameRate::FPS_29_97)
+    f_p(p, "frameRate").map(|f| limits::frame_rate(FrameRate::from_f64(f), FrameRate::FPS_29_97)).unwrap_or(FrameRate::FPS_29_97)
 }
 
 fn placeholder_footage(p: &Value) -> Footage {
-    let w = p.get("width").and_then(Value::as_u64).unwrap_or(1920) as u32;
-    let h = p.get("height").and_then(Value::as_u64).unwrap_or(1080) as u32;
+    let w = p.get("width").and_then(Value::as_u64).map_or(1920, limits::size);
+    let h = p.get("height").and_then(Value::as_u64).map_or(1080, limits::size);
     Footage {
         path: String::new(),
         kind: FootageKind::Video,
@@ -133,8 +133,8 @@ fn solid_from(p: &Value, s: &Session) -> Solid {
     .unwrap_or([0.5, 0.5, 0.5]);
     Solid {
         color,
-        width: p.get("width").and_then(Value::as_u64).map(|v| v as u32).unwrap_or(cw).max(1),
-        height: p.get("height").and_then(Value::as_u64).map(|v| v as u32).unwrap_or(ch).max(1),
+        width: p.get("width").and_then(Value::as_u64).map(limits::size).unwrap_or(cw).max(1),
+        height: p.get("height").and_then(Value::as_u64).map(limits::size).unwrap_or(ch).max(1),
         pixel_aspect: 1.0,
     }
 }

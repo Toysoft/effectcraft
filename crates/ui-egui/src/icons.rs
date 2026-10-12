@@ -22,6 +22,7 @@ pub enum Icon {
     Ellipse,
     Polygon,
     Star,
+    StarFilled,
     Pen,
     PenAdd,
     PenDelete,
@@ -270,6 +271,18 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Star => {
             let pts = pen.star(8.0, 8.6, 6.4, 2.7, 5);
             pen.closed(&pts);
+        }
+        StarFilled => {
+            // Five triangles fill the concave star without a convex-polygon approximation.
+            let pts = pen.star(8.0, 8.6, 6.4, 2.7, 5);
+            for pair in pts.windows(2) {
+                if let [a, b] = pair {
+                    pen.fill(&[(8.0, 8.6), *a, *b]);
+                }
+            }
+            if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+                pen.fill(&[(8.0, 8.6), *last, *first]);
+            }
         }
         Pen => {
             pen.closed(&[(8.0, 1.8), (12.0, 9.0), (8.0, 14.0), (4.0, 9.0)]);

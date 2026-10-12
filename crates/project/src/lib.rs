@@ -8,6 +8,7 @@
 
 pub mod build;
 pub mod essential;
+pub mod limits;
 pub mod props;
 pub mod render_queue;
 pub mod render_templates;
@@ -1246,7 +1247,9 @@ impl Project {
             _ => None,
         }
     }
-    pub fn add_item(&mut self, name: &str, label: Label, parent: Option<ItemId>, kind: ItemKind) -> ItemId {
+    /// Adds an item; its size, frame rate and the like are brought within [`limits`] first.
+    pub fn add_item(&mut self, name: &str, label: Label, parent: Option<ItemId>, mut kind: ItemKind) -> ItemId {
+        limits::repair_kind(name, &mut kind, &mut vec![]);
         let id = ItemId(self.alloc());
         self.items.insert(id, Item { id, name: name.into(), label, comment: String::new(), parent, kind, proxy: None });
         id
@@ -1336,12 +1339,22 @@ impl Project {
         serde_json::to_string(self).unwrap_or_default()
     }
     pub fn from_json(s: &str) -> Result<Project, ProjectError> {
+        Project::from_json_repaired(s).map(|(p, _)| p)
+    }
+    /// [`Project::from_json`], also returning one line per value that was out of [`limits`] and
+    /// was corrected (a composition of a billion pixels, a zero frame rate…), so a corrupt or
+    /// hostile file still opens, within bounds, and the user can be told what changed.
+    pub fn from_json_repaired(s: &str) -> Result<(Project, Vec<String>), ProjectError> {
         let mut p: Project = serde_json::from_str(s).map_err(|e| ProjectError::Invalid(e.to_string()))?;
         if p.schema > SCHEMA_VERSION {
             return Err(ProjectError::Invalid(format!("project schema {} is newer than this version supports ({SCHEMA_VERSION})", p.schema)));
         }
         p.fix_next_id();
-        Ok(p)
+        let mut notes = vec![];
+        for item in p.items.values_mut() {
+            limits::repair_item(item, &mut notes);
+        }
+        Ok((p, notes))
     }
 }
 

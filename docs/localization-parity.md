@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first measurement of every catalog against the After Effects 2026 26.5 language set) · **Target:** Adobe After Effects 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (Ukrainian panel catalog recounted after it caught up with the Chinese ones) · **Target:** Adobe After Effects 2026
 
 How much of EffectCraft's interface is translated, language by language, compared with After
 Effects. [gaps.md](gaps.md) gap 16 and workstream G9 hold the work;
@@ -65,7 +65,7 @@ Other languages EffectCraft ships (2):
 | Language | Code | UI strings translated | Status | To `full` |
 |---|---|---|---|---|
 | Traditional Chinese | `zh-hant` | 1,081 (≈ 28%): menus 618/618, panels 463 | partial | 6–9 h + review |
-| Ukrainian | `uk` | 1,015 (≈ 26%): menus 618/618, panels 397 | partial | 6–9 h + review |
+| Ukrainian | `uk` | 1,113 (≈ 29%): menus 618/618, panels 495/496 | partial | 6–9 h + review |
 
 After Effects also ships Italian and Russian, which EffectCraft does not (8–12 h each).
 
@@ -87,3 +87,4 @@ can give; none has had it.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | major | First localization parity document: catalog rows counted for all six languages, the twelve-language table, After Effects' 11 shipped languages from its bundle |
+| 2026-10-11 | minor | Ukrainian panel catalog brought level with the Chinese ones (495 of 496 rows, counted at this commit); its share rises to ≈ 29%. The other languages' panel counts are the 10 October measurement |

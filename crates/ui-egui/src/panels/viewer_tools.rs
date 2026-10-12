@@ -509,6 +509,50 @@ fn toggle_popup(ui: &egui::Ui, id: &str) {
     ui.data_mut(|d| d.insert_temp(pid, !open));
 }
 
+/// A magnification ratio dropdown (the Composition and Layer panels' footers): `zoom` is the
+/// shown magnification and `current` the stored one (None = fit), both in points per pixel.
+/// Returns the chosen magnification (`Some(None)` = Fit).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn magnification_menu(
+    app: &mut EffectcraftApp,
+    ui: &mut egui::Ui,
+    r: Rect,
+    id: &str,
+    auto_id: &str,
+    auto_items: &str,
+    zoom: f32,
+    current: Option<f32>,
+    fit: f32,
+) -> Option<Option<f32>> {
+    let t = app.tokens;
+    let ppp = ui.ctx().pixels_per_point();
+    let pop = format!("{id}-pop");
+    let response =
+        widgets::dropdown(ui, r, &magnification_label(zoom * ppp * 100.0), &t, egui::Id::new(id)).on_hover_text(crate::i18n::tr("Magnification ratio popup"));
+    if response.clicked() {
+        toggle_popup(ui, &pop);
+    }
+    app.auto.add_response(auto_id, &response, "Magnification");
+    const MAGS: [&str; 15] = ["Fit", "Fit up to 100%", "-", "1.5%", "3.1%", "6.25%", "12.5%", "25%", "33.3%", "50%", "100%", "200%", "400%", "800%", "1600%"];
+    let cur = (zoom * ppp * 100.0 * 10.0).round() / 10.0;
+    let items: Vec<(String, bool)> = MAGS
+        .iter()
+        .map(|m| {
+            let on = match *m {
+                "Fit" => current.is_none(),
+                s => s.trim_end_matches('%').parse::<f32>().is_ok_and(|v| current.is_some() && (v - cur).abs() < 0.06),
+            };
+            (m.to_string(), on)
+        })
+        .collect();
+    let i = popup(app, ui, &pop, r, &items, auto_items)?;
+    match *MAGS.get(i)? {
+        "Fit" => Some(None),
+        "Fit up to 100%" => Some(Some(fit.min(1.0 / ppp))),
+        s => s.trim_end_matches('%').parse::<f32>().ok().map(|v| Some(v / 100.0 / ppp)),
+    }
+}
+
 /// Magnification as After Effects shows it: "136.1 %", "100 %".
 pub(crate) fn magnification_label(pct: f32) -> String {
     if (pct - pct.round()).abs() < 0.05 { format!("{:.0} %", pct.round()) } else { format!("{pct:.1} %") }
@@ -576,31 +620,9 @@ fn bottom_bar_contents(app: &mut EffectcraftApp, ui: &mut egui::Ui, bar: Rect, z
 
     // Magnification.
     let r = Rect::from_min_size(pos2(x, cy - 10.0), vec2(80.0, 20.0));
-    let response = widgets::dropdown(ui, r, &magnification_label(zoom * ppp * 100.0), &t, egui::Id::new("vw-mag"))
-        .on_hover_text(crate::i18n::tr("Magnification ratio popup"));
-    if response.clicked() {
-        toggle_popup(ui, "vw-mag-pop");
-    }
-    app.auto.add_response("viewer.magnification", &response, "Magnification");
-    const MAGS: [&str; 15] = ["Fit", "Fit up to 100%", "-", "1.5%", "3.1%", "6.25%", "12.5%", "25%", "33.3%", "50%", "100%", "200%", "400%", "800%", "1600%"];
-    let cur = (zoom * ppp * 100.0 * 10.0).round() / 10.0;
-    let items: Vec<(String, bool)> = MAGS
-        .iter()
-        .map(|m| {
-            let on = match *m {
-                "Fit" => app.ui.viewer.zoom.is_none(),
-                s => s.trim_end_matches('%').parse::<f32>().is_ok_and(|v| app.ui.viewer.zoom.is_some() && (v - cur).abs() < 0.06),
-            };
-            (m.to_string(), on)
-        })
-        .collect();
-    if let Some(i) = popup(app, ui, "vw-mag-pop", r, &items, "magnification") {
+    if let Some(z) = magnification_menu(app, ui, r, "vw-mag", "viewer.magnification", "magnification", zoom, app.ui.viewer.zoom, fit) {
         app.ui.viewer.pan = [0.0, 0.0];
-        app.ui.viewer.zoom = match MAGS[i] {
-            "Fit" => None,
-            "Fit up to 100%" => Some(fit.min(1.0 / ppp)),
-            s => s.trim_end_matches('%').parse::<f32>().ok().map(|v| v / 100.0 / ppp),
-        };
+        app.ui.viewer.zoom = z;
     }
     x = r.max.x + 4.0;
 

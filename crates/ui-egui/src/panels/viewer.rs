@@ -206,6 +206,8 @@ use super::viewer_overlays::{self as ov, VertexHit};
 use super::viewer_tools as vt;
 
 const HANDLE: f32 = 7.0;
+/// Shown when a Roto Brush tool is used in the Composition panel (#753).
+const ROTO_HINT: &str = "The Roto Brush works in the Layer panel. Double-click the layer to open it.";
 
 thread_local! {
     /// The 3D view camera of the viewer being drawn (None = the comp's active camera).
@@ -1010,8 +1012,6 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         app.auto.add("viewer.referenceAxes", Rect::from_center_size(corner, vec2(56.0, 56.0)), "3D reference axes");
     }
 
-    super::expr_editor::error_banner(app, ui, area);
-
     // Track points of the current track (Tracker panel) on its layer, while that layer is selected.
     let mut track_hits = vec![];
     let track_cur = super::tracker::viewer_track(app);
@@ -1113,7 +1113,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let context_layers: Vec<u64> =
         app.session.state.selected_layers.iter().filter(|id| comp.layer(**id).is_some_and(|l| !l.switches.locked)).map(|id| id.0).collect();
     let mut context_actions = Vec::new();
-    resp.context_menu(|ui| {
+    let copy_frame = crate::i18n::label(app, "comp.copyFrame", "Copy Frame to Clipboard");
+    crate::widgets::context_menu(&resp, |ui| {
         let hits = ui.data(|d| d.get_temp::<Vec<(u64, String)>>(menu_hits_id)).unwrap_or_default();
         if !hits.is_empty() {
             ui.menu_button(crate::i18n::tr("Select"), |ui| {
@@ -1132,6 +1133,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             ui.label(crate::i18n::tr("No unlocked layer selected"));
         } else {
             super::timeline::layer_menu(ui, &context_layers, &mut context_actions);
+        }
+        ui.separator();
+        if ui.button(copy_frame).clicked() {
+            context_actions.push(("comp.copyFrame".to_owned(), serde_json::json!({"comp": cid.0})));
+            ui.close();
         }
     });
     for (id, params) in context_actions {
@@ -1418,6 +1424,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     }
                     Some(Gesture::Marquee { start: press })
                 }
+            }
+            // The Roto Brush paints in the Layer panel only: say so instead of doing nothing.
+            rt if rt.roto_kind(false).is_some() => {
+                app.ui.status = crate::i18n::tr(ROTO_HINT).to_string();
+                None
             }
             _ => None,
         };
@@ -1776,6 +1787,13 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     let _ = app.session.execute("mask.selectVertices", json!({"vertices": [me], "add": mods.shift, "toggle": mods.shift}));
                 }
             }
+            // The Roto Brush paints in the Layer panel only: select as usual and say so.
+            rt if rt.roto_kind(false).is_some() => {
+                if pick(app, &ectx, cpt, mods.shift).is_none() {
+                    let _ = app.session.execute("edit.deselectAll", json!({}));
+                }
+                app.ui.status = crate::i18n::tr(ROTO_HINT).to_string();
+            }
             _ => {
                 if pick(app, &ectx, cpt, mods.shift).is_none() {
                     let _ = app.session.execute("edit.deselectAll", json!({}));
@@ -1807,10 +1825,21 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         && let Some(pos) = resp.interact_pointer_pos()
     {
         let cpt = map.to_comp(pos);
-        if let Some(l) = pick(app, &ectx, cpt, false).and_then(|l| comp.layer(l))
-            && let effectcraft_engine::project::LayerSource::Comp { item } = &l.source
-        {
-            app.session.open_comp(*item);
+        let roto = app.ui.tool.roto_kind(false).is_some();
+        if let Some(l) = pick(app, &ectx, cpt, false).and_then(|l| comp.layer(l)) {
+            match &l.source {
+                effectcraft_engine::project::LayerSource::Comp { item } => app.session.open_comp(*item),
+                // With a Roto Brush tool, double-clicking a layer opens it in the Layer panel,
+                // where the brush works (After Effects).
+                _ if roto => {
+                    let id = l.id.0;
+                    match crate::menus::invoke(app, &ctx, "layer.openLayer", json!({"layer": id})) {
+                        Ok(_) => app.ui.status.clear(),
+                        Err(e) => app.ui.status = e,
+                    }
+                }
+                _ => {}
+            }
         }
     }
     // 3D Camera Tracker points, targets and their menu (on top of the viewer's gestures while
@@ -2282,7 +2311,7 @@ fn create_shape(app: &mut EffectcraftApp, tool: Tool, a: [f64; 2], b: [f64; 2], 
 
 fn empty_state(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
-    let p = ui.painter();
+    let p = ui.painter().clone();
     p.rect_filled(rect, 0.0, t.pasteboard);
     let c = rect.center();
     p.text(c - vec2(0.0, 40.0), Align2::CENTER_CENTER, crate::i18n::tr("Composition"), Tokens::semibold(16.0), t.text);
@@ -2296,6 +2325,36 @@ fn empty_state(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let _ = crate::menus::invoke(app, &ui.ctx().clone(), "file.import", json!({}));
     }
     app.auto.add("viewer.empty.import", b2, "New Composition From Footage");
+    // A Project item dropped on the empty viewer creates the first composition,
+    // just like dropping it onto an empty Timeline (#684). Multiple selected
+    // items use the existing New Comp from Selection dialog.
+    let ctx = ui.ctx().clone();
+    if let Some(crate::panels::DragPayload::Item(dragged)) = egui::DragAndDrop::payload::<crate::panels::DragPayload>(&ctx).as_deref()
+        && ui.rect_contains_pointer(rect)
+    {
+        let items: Vec<effectcraft_engine::project::ItemId> = crate::panels::project_drop_items(app, *dragged)
+            .into_iter()
+            .map(effectcraft_engine::project::ItemId)
+            .filter(|id| {
+                app.session.project.item(*id).is_some_and(|item| match &item.kind {
+                    effectcraft_engine::project::ItemKind::Footage(f) => f.kind != effectcraft_engine::project::FootageKind::Data,
+                    effectcraft_engine::project::ItemKind::Solid(_) | effectcraft_engine::project::ItemKind::Comp(_) => true,
+                    _ => false,
+                })
+            })
+            .collect();
+        if !items.is_empty() {
+            p.rect_stroke(rect.shrink(2.0), 0.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+            app.auto.add("viewer.newCompDrop", rect, "Drop footage to create a composition");
+            if ctx.input(|i| i.pointer.any_released()) {
+                app.session.state.project_selection = items;
+                if let Err(e) = crate::menus::invoke(app, &ctx, "file.newCompFromSelection", json!({})) {
+                    app.ui.status = e;
+                }
+                egui::DragAndDrop::clear_payload(&ctx);
+            }
+        }
+    }
 }
 
 /// `#rrggbb` → sRGB bytes.
@@ -2389,9 +2448,9 @@ fn show_frame(app: &mut EffectcraftApp, ctx: &egui::Context, key: crate::frames:
         FrameImage::Cpu(img) => {
             // Frames wider or taller than the GPU's texture limit go up averaged down too (#201).
             let max = crate::frames::max_texture_side(ctx);
-            let fitted = crate::frames::fit_texture_by((*img).clone(), max, minify);
+            let fitted = crate::frames::fit_shared_texture_by(&img, max, minify);
             match &mut app.viewer_tex {
-                Some((tex, k, m)) if tex.size() == fitted.size => {
+                Some((tex, k, m)) if tex.size() == fitted.size() => {
                     tex.set(fitted, opts);
                     (*k, *m) = (key, minify);
                 }

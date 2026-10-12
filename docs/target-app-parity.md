@@ -889,7 +889,11 @@ saved warns that what this version doesn't know is lost on saving (`file.open` r
 `savedBy`). Saving checks that the file reads back first, so a value JSON can't hold (NaN)
 fails the save with a message instead of writing a project that can never be opened (the file
 on disk is left as it was). Increment and Save and Save a Copy keep an XML project (`.ecprojx`)
-XML; a file that isn't a project says so by name.
+XML; a file that isn't a project says so by name. A corrupt or hostile project opens within the
+limits the commands use (#788): compositions, solids and footage at most 30,000 × 30,000 px (as in
+After Effects), frame rates 0.001–1000 fps, pixel aspect 0.1–10, compositions at least one frame
+long and 2–64 motion-blur samples; `file.open` lists what it corrected (`repaired`) and a toast
+names it.
 
 ### Update: M3.13 menu bar
 

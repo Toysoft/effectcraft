@@ -60,6 +60,8 @@ pub struct DialogState {
     pub unsaved: super::unsaved::Pending,
     /// Deleting Project items in use: the deletion waiting on the prompt.
     pub delete_items: super::delete_items::Pending,
+    /// The Gradient Editor's draft and the property it edits.
+    pub gradient: super::gradient_editor::Draft,
 }
 
 pub fn open_new_comp(app: &mut EffectcraftApp) {
@@ -149,9 +151,23 @@ pub fn route_layer_settings(app: &mut EffectcraftApp, id: &str, params: &Value) 
     }
 }
 
+/// The room a modal dialog may take: the window less a margin.
+fn modal_space(ctx: &egui::Context) -> egui::Vec2 {
+    (ctx.content_rect().size() - vec2(48.0, 48.0)).max(vec2(120.0, 80.0))
+}
+
 pub(crate) fn modal(ctx: &egui::Context, title: &str, size: egui::Vec2, t: &Tokens, body: impl FnOnce(&mut egui::Ui)) {
-    let available = (ctx.content_rect().size() - vec2(48.0, 48.0)).max(vec2(120.0, 80.0));
-    let size = size.min(available);
+    let max_height = (modal_space(ctx).y - 84.0).max(40.0);
+    modal_fit(ctx, title, size, t, |ui, _| {
+        egui::ScrollArea::both().max_height(max_height).auto_shrink([false, true]).show(ui, body);
+    });
+}
+
+/// [`modal`] without its scroll area, for a dialog that keeps its buttons in view and scrolls
+/// only its content: `body` gets the height left under the title, with `size` kept within the
+/// window.
+pub(crate) fn modal_fit(ctx: &egui::Context, title: &str, size: egui::Vec2, t: &Tokens, body: impl FnOnce(&mut egui::Ui, f32)) {
+    let size = size.min(modal_space(ctx));
     egui::Modal::new(egui::Id::new(("modal", title)))
         .backdrop_color(Color32::from_black_alpha(120))
         .frame(egui::Frame::window(&ctx.style_of(ctx.theme())).fill(t.panel_bg).inner_margin(egui::Margin::same(18)))
@@ -161,7 +177,8 @@ pub(crate) fn modal(ctx: &egui::Context, title: &str, size: egui::Vec2, t: &Toke
             // The id stays keyed on the untranslated source, so switching language cannot move it.
             ui.label(egui::RichText::new(tr(title)).font(Tokens::semibold(15.0)).color(t.tab_text_active));
             ui.add_space(10.0);
-            egui::ScrollArea::both().max_height((available.y - 84.0).max(40.0)).auto_shrink([false, true]).show(ui, body);
+            let title_h = ui.cursor().top() - ui.min_rect().top();
+            body(ui, (size.y - 36.0 - title_h).max(40.0));
         });
 }
 
@@ -193,6 +210,7 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context) {
         Dialog::RenderTemplates => super::rq_templates::show(app, ctx, &t),
         Dialog::UnsavedChanges => super::unsaved::show(app, ctx, &t),
         Dialog::DeleteItems => super::delete_items::show(app, ctx, &t),
+        Dialog::GradientEditor => super::gradient_editor::show(app, ctx, &t),
     }
 }
 

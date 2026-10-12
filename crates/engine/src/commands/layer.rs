@@ -4,7 +4,8 @@ use effectcraft_color::{BlendMode, Label};
 use effectcraft_keyframe::{Justify, TextDoc, Value as KV};
 use effectcraft_project::build::{self, Ids};
 use effectcraft_project::{
-    Comp, FrameBlend, GroupKind, ItemId, ItemKind, Layer, LayerId, LayerSource, MaskMode, MatteKind, Project, PropGroup, Quality, Solid, TrackMatte,
+    Comp, FrameBlend, GroupKind, ItemId, ItemKind, Layer, LayerId, LayerSource, MaskMode, MatteKind, Node, Project, PropGroup, Quality, Solid, TrackMatte,
+    limits,
 };
 use effectcraft_time::Tick;
 use serde_json::{Value, json};
@@ -92,8 +93,9 @@ fn new_solid_like(s: &mut Session, p: &Value, adjustment: bool) -> Result<Value>
     let cid = comp_id(s, p)?;
     let comp = s.project.comp(cid).ok_or(EngineError::NoComp)?.clone();
     let color = color_p(p, "color").unwrap_or(if adjustment { [1.0, 1.0, 1.0] } else { [0.85, 0.2, 0.2] });
-    let w = p.get("width").and_then(Value::as_u64).map(|v| v as u32).unwrap_or(comp.width);
-    let h = p.get("height").and_then(Value::as_u64).map(|v| v as u32).unwrap_or(comp.height);
+    // 1 to 30,000 px a side (#788): the layer is sized from the same numbers as its solid.
+    let w = p.get("width").and_then(Value::as_u64).map(limits::size).unwrap_or(comp.width);
+    let h = p.get("height").and_then(Value::as_u64).map(limits::size).unwrap_or(comp.height);
     let pixel_aspect = pixel_aspect_p(p)?.unwrap_or(comp.pixel_aspect);
     let default_name = if adjustment { "Adjustment Layer 1".to_string() } else { "Solid 1".to_string() };
     let name = str_p(p, "name").map(str::to_string).unwrap_or(default_name);
@@ -114,7 +116,7 @@ fn new_solid_like(s: &mut Session, p: &Value, adjustment: bool) -> Result<Value>
 fn pixel_aspect_p(p: &Value) -> Result<Option<f64>> {
     match p.get("pixelAspect").and_then(Value::as_f64) {
         Some(v) if !(v.is_finite() && v > 0.0) => Err(bad("layer.settings", "`pixelAspect` must be a positive number")),
-        v => Ok(v),
+        v => Ok(v.map(limits::pixel_aspect)),
     }
 }
 
@@ -295,7 +297,10 @@ fn add_item(s: &mut Session, p: &Value) -> Result<Value> {
         let mut l = build::layer(proj, &comp, &it.name, src, size, dur);
         l.start_time = start;
         l.in_point = start;
-        l.out_point = fr.snap_nearest((start + dur.unwrap_or(comp.duration)).min(comp.duration)).max(start + fr.frame_duration());
+        // Footage and precomps keep their full length past the comp's end (After Effects); items
+        // without a duration (solids, comp-length stills) end with the comp.
+        let end = dur.map_or((start + comp.duration).min(comp.duration), |d| start + d);
+        l.out_point = fr.snap_nearest(end).max(start + fr.frame_duration());
         place(&mut l, position);
         insert_layer_at(proj, st, cid, l, index)
     })?;
@@ -1186,6 +1191,26 @@ fn add_shape_item(s: &mut Session, p: &Value) -> Result<Value> {
     let uid = s.edit("Add Shape Item", None, |proj, _| {
         let mut next = proj.next_id;
         let mut ids = Ids(&mut next);
+        // Front / Bevel / Side / Back ▸ property: into the group's surface item (one per group).
+        if let Some((surface, prop)) = build::shape_surface_kind(&kind) {
+            let target = shape_item_target(proj, cid, lid, group_uid)?;
+            let item = match target.children.iter().position(|c| matches!(c, Node::Group(g) if g.match_id == surface)) {
+                Some(i) => i,
+                None => {
+                    let g = build::shape_surface(&mut ids, surface).ok_or_else(|| bad("layer.addShapeItem", format!("unknown kind `{kind}`")))?;
+                    target.children.push(g.into());
+                    target.children.len() - 1
+                }
+            };
+            let Some(Node::Group(g)) = target.children.get_mut(item) else { return Err(bad("layer.addShapeItem", "no such group")) };
+            if g.get(prop).is_none() {
+                let p = build::shape_surface_prop(&mut ids, prop).ok_or_else(|| bad("layer.addShapeItem", format!("unknown kind `{kind}`")))?;
+                g.children.push(p.into());
+            }
+            let uid = g.uid;
+            proj.next_id = next;
+            return Ok(uid);
+        }
         let g = match kind.as_str() {
             "group" => build::shape_group(&mut ids, "Group 1", vec![]),
             "rect" | "rectangle" => build::shape_rect(&mut ids, [200.0, 200.0], [0.0, 0.0], 0.0),
@@ -1203,21 +1228,26 @@ fn add_shape_item(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let uid = g.uid;
         proj.next_id = next;
-        let l = layer_mut(proj, cid, lid)?;
-        let contents = l.props.sub_mut("contents").ok_or_else(|| bad("layer.addShapeItem", "not a shape layer"))?;
-        let target = match group_uid {
-            Some(u) => contents
-                .find_group_mut(u)
-                .and_then(|g| if g.match_id == "contents" { Some(g) } else { g.sub_mut("contents") })
-                .ok_or_else(|| bad("layer.addShapeItem", "no such group"))?,
-            None => contents,
-        };
-        target.children.push(g.into());
+        shape_item_target(proj, cid, lid, group_uid)?.children.push(g.into());
         Ok(uid)
     })?;
     // The new item's property path, ready for prop.set / add_keyframe (`contents/trim#2/end`).
     let path = s.project.comp(cid).and_then(|c| c.layer(lid)).and_then(|l| l.props.match_path_of(uid));
     Ok(json!({"uid": uid, "path": path}))
+}
+
+/// The contents a new shape item goes into: the shape group `group_uid` (its Contents), else the
+/// layer's Contents.
+fn shape_item_target(proj: &mut Project, cid: ItemId, lid: LayerId, group_uid: Option<u64>) -> Result<&mut PropGroup> {
+    let l = layer_mut(proj, cid, lid)?;
+    let contents = l.props.sub_mut("contents").ok_or_else(|| bad("layer.addShapeItem", "not a shape layer"))?;
+    Ok(match group_uid {
+        Some(u) => contents
+            .find_group_mut(u)
+            .and_then(|g| if g.match_id == "contents" { Some(g) } else { g.sub_mut("contents") })
+            .ok_or_else(|| bad("layer.addShapeItem", "no such group"))?,
+        None => contents,
+    })
 }
 
 fn set_text(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1404,8 +1434,8 @@ fn layer_settings(s: &mut Session, p: &Value) -> Result<Value> {
         _ => {}
     }
     let color = color_p(p, "color");
-    let w = p.get("width").and_then(Value::as_u64).map(|v| v.max(1) as u32);
-    let h = p.get("height").and_then(Value::as_u64).map(|v| v.max(1) as u32);
+    let w = p.get("width").and_then(Value::as_u64).map(limits::size);
+    let h = p.get("height").and_then(Value::as_u64).map(limits::size);
     let pixel_aspect = pixel_aspect_p(p)?;
     let name = str_p(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     let affect_all = p.get("affectAll").and_then(Value::as_bool).unwrap_or(true);
@@ -1570,7 +1600,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add (Shape)",
             [],
             None,
-            "{layer?, kind: group|rect|ellipse|star|polygon|path|fill|stroke|gfill|gstroke|trim|repeater|round|offset|pucker|twist|zigzag|wiggle|merge, group?: uid|path} → {uid, path}",
+            "{layer?, kind: group|rect|ellipse|star|polygon|path|fill|stroke|gfill|gstroke|trim|repeater|round|offset|pucker|twist|zigzag|wiggle|merge|frontColor|bevelColor|sideColor|backColor, group?: uid|path} → {uid, path} (frontColor…backColor: the group's Front / Bevel / Side / Back item, which colours that surface of every extruded paint in the group in Advanced 3D)",
             has_layers,
             add_shape_item
         ),

@@ -1159,6 +1159,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "pollster 0.4.0",
  "rfd",
+ "serde",
  "serde_json",
  "winit",
  "winresource",
@@ -1430,6 +1431,7 @@ dependencies = [
  "filmcraft-codecs",
  "filmcraft-color",
  "filmcraft-frame",
+ "filmcraft-isobmff",
  "filmcraft-media",
  "filmcraft-time",
  "gif",
@@ -1446,6 +1448,7 @@ version = "0.8.0"
 dependencies = [
  "effectcraft-geom",
  "image",
+ "miniz_oxide 0.8.9",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1557,9 +1560,11 @@ dependencies = [
  "effectcraft-keyframe",
  "effectcraft-path",
  "effectcraft-project",
+ "effectcraft-psd",
  "effectcraft-render",
  "effectcraft-time",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]

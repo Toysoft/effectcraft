@@ -107,7 +107,7 @@ See [MCP conventions](mcp.md) for core tools, resources, strict arguments, and r
 | `set_property {layer, path, value?, time?, timeBase?, expression?, comp?}` | Sets a static value. With `time` it sets a keyframe (`timeBase: "comp"` for comp seconds); with `expression` it sets an expression. |
 | `add_keyframe {layer, path, time+value \| keys:[...], timeBase?, interpolation?, comp?}` | Adds keys (layer seconds, or comp seconds with `timeBase: "comp"`), then optionally applies linear/bezier/hold/easyEase. |
 | `list_effects {filter?}` | Effect ids, names, categories, GPU / 32-bpc support and parameters. |
-| `list_fonts {query?, rescan?}` | Font families text layers can use, bundled and installed, with their styles, origin and own-language name; `rescan` picks up fonts installed since launch. |
+| `list_fonts {query?, variable?, rescan?}` | Font families text layers can use, bundled and installed, with their styles, origin, whether each is a variable font and own-language name; `variable` lists only variable fonts; `rescan` picks up fonts installed since launch. |
 | `add_effect {layer, effect, values?, comp?}` | Apply an effect and set its parameters in one call and one undo step (a failing value leaves nothing applied); returns the instance path (`effects/#n`) and its parameter paths. |
 | `render_frame {comp?, time?, max_side?, path?, inline?, transparent?}` | Returns a PNG image of a frame; `transparent: true` keeps the alpha (as an RGB + Alpha render writes it) instead of compositing over the comp background. |
 | `open_project {path \| demo \| new}` / `save_project {path?}` | Open and save files. |
@@ -123,7 +123,8 @@ See [MCP conventions](mcp.md) for core tools, resources, strict arguments, and r
 | `render_preview` | Render a PNG without writing a file (`comp`, `time`, `max_side`, `transparent`). |
 
 Layers are referenced by id (from `get_comp`), `"#n"` (1-based index from the top) or name. Comps are
-referenced by id or name, and default to the active comp. Property paths come from `get_layer`, for
+referenced by id or name, and default to the active comp. An id may also be sent as a string (`"98"`):
+an all-digit string that matches no name is taken as the id. Property paths come from `get_layer`, for
 example `transform/position`, `transform/opacity`, `effects/#1/blurriness` or `@57` (by uid). Times
 are in seconds. Keyframe times are layer time, which equals comp time unless the layer is offset or
 stretched.
@@ -491,8 +492,9 @@ whole layer, or only characters `range: [start, end]` (character indices): chara
    work on the selected text; `text.endEdit` commits (an empty Type-tool layer is removed).
 
 Fonts: `text.fonts` (MCP `list_fonts`) lists every family a text layer can use, bundled and installed, with its
-styles, origin (`bundled`, `system`, `user`) and own-language name (`{"query":"gothic"}` filters
-by name; `{"rescan":true}` first picks up fonts installed since launch). Pass a listed `family` and
+styles, origin (`bundled`, `system`, `user`), `variable` (it has variation axes) and own-language name
+(`{"query":"gothic"}` filters by name, `{"variable":true}` keeps only variable fonts, like the font
+menu's Variable Fonts filter; `{"rescan":true}` first picks up fonts installed since launch). Pass a listed `family` and
 one of its `styles` to `layer.setText {"font", "style"}`; `text.fontFeatures` says which OpenType
 options a font draws with its own glyphs.
 A tool with its own font library can hand it over without installing it: folders listed in
@@ -512,7 +514,10 @@ Scripts that build ScriptUI windows publish them to the session; agents drive th
 3. `scriptui.click {"widget": "ok"}` presses a button / toggles a checkbox / picks a radio button or
    tab; `scriptui.set {"widget": "#4", "value": "Shot_"}` types into edit text, moves a slider or
    picks a list item (index or text); `scriptui.close {"result": 2}` closes. Controls are addressed
-   by id, `#id`, `properties.name` or text; `window` can be omitted when one window is open. Each
+   by id, `#id`, `properties.name` or text; `window` can be omitted when one window is open.
+   `scriptui.mouse {"widget": "pad", "type": "mousedown", "x": 10, "y": 20}` sends a mouse event
+   (`mousedown`, `mouseup`, `mousemove`, `mouseover`, `mouseout`, `click`; `x`/`y` relative to the
+   control, `button`, `detail`, `shiftKey`…) to the script's `addEventListener` listeners. Each
    returns the handler run's `{ok, output, error}`.
 
 A dialog's `show()` waits for the user: the `script.run` / `file.runScript` reply carries

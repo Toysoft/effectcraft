@@ -280,6 +280,57 @@ fn toolbar_fill_and_stroke_paint_selected_shape_layers() {
     let _ = s.render(cid, s.time(), Default::default());
 }
 
+/// The toolbar's Fill Options / Stroke Options change a selected shape layer's paint kind (#732):
+/// None switches the fill off, a gradient turns the Fill into a Gradient Fill that keeps its
+/// opacity, Solid Color turns it back, and a Stroke kind adds a stroke where there is none.
+#[test]
+fn toolbar_fill_and_stroke_kinds_change_selected_shape_layers() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"width": 400, "height": 300, "duration": 2})).unwrap();
+    let sh = s.execute("layer.newShape", json!({"kind": "rect", "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    let items = |s: &Session| -> Vec<(String, bool)> {
+        let l = s.active_comp().unwrap().layer(effectcraft_project::LayerId(sh)).unwrap();
+        l.props.group("contents/group/contents").unwrap().groups().map(|g| (g.match_id.clone(), g.enabled)).collect()
+    };
+    let kinds = |s: &mut Session| {
+        let p = s.execute("shape.fillStroke", json!({})).unwrap();
+        (p["fillType"].as_str().unwrap().to_string(), p["strokeType"].as_str().unwrap().to_string())
+    };
+    assert_eq!(kinds(&mut s), ("solid".into(), "none".into()));
+    let cid = s.active_comp_id().unwrap();
+    let centre = |s: &Session| s.render(cid, s.time(), Default::default()).get(200, 150);
+    let red = centre(&s);
+    // None switches the fill off: nothing is drawn, and the item stays.
+    s.execute("shape.fillStroke", json!({"fillType": "none"})).unwrap();
+    assert_eq!(items(&s), [("rect".into(), true), ("fill".into(), false)]);
+    assert_eq!(kinds(&mut s).0, "none");
+    assert_ne!(centre(&s), red, "the fill is off");
+    // A radial gradient: the Fill becomes a Gradient Fill (switched on) that keeps its opacity.
+    s.execute("shape.fillStroke", json!({"fillType": "solid", "fill": "#ff0000"})).unwrap();
+    assert_eq!(centre(&s), red);
+    let opacity = |s: &Session, m: &str| {
+        let l = s.active_comp().unwrap().layer(effectcraft_project::LayerId(sh)).unwrap();
+        l.props.group(&format!("contents/group/contents/{m}")).unwrap().get("opacity").unwrap().value.as_f64()
+    };
+    s.execute("prop.set", json!({"layer": sh, "path": "contents/group/contents/fill/opacity", "value": 40})).unwrap();
+    s.execute("shape.fillStroke", json!({"fillType": "radial"})).unwrap();
+    assert_eq!(items(&s), [("rect".into(), true), ("gfill".into(), true)]);
+    assert_eq!((kinds(&mut s).0.as_str(), opacity(&s, "gfill")), ("radial", 40.0));
+    s.execute("shape.fillStroke", json!({"fillType": "linear"})).unwrap();
+    assert_eq!(kinds(&mut s).0, "linear");
+    s.execute("shape.fillStroke", json!({"fillType": "solid", "fill": "#00ff00"})).unwrap();
+    assert_eq!(items(&s), [("rect".into(), true), ("fill".into(), true)]);
+    assert_eq!(opacity(&s, "fill"), 40.0);
+    // A Stroke kind adds a stroke (before the fill); None switches it off again; undo is per step.
+    s.execute("shape.fillStroke", json!({"strokeType": "linear"})).unwrap();
+    assert_eq!(items(&s), [("rect".into(), true), ("gstroke".into(), true), ("fill".into(), true)]);
+    s.execute("shape.fillStroke", json!({"strokeType": "none"})).unwrap();
+    assert_eq!(kinds(&mut s), ("solid".into(), "none".into()));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(kinds(&mut s), ("solid".into(), "linear".into()));
+    assert!(s.execute("shape.fillStroke", json!({"fillType": "plaid"})).is_err());
+}
+
 /// Selecting a mask in the Timeline (its row or its Mask Path) selects all of its points, so the
 /// viewer drags the whole mask (#203); a shape's Path item works the same way.
 #[test]

@@ -24,6 +24,7 @@ mod native_menu;
 // Built everywhere so it stays checked; only the macOS app uses it.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod sheet_dialogs;
+mod window;
 
 use effectcraft_ui_egui::EffectcraftApp;
 use serde_json::json;
@@ -108,8 +109,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("EffectCraft")
-            .with_inner_size([1680.0, 1020.0])
-            .with_min_inner_size([960.0, 600.0])
+            .with_inner_size(window::DEFAULT_SIZE)
+            .with_min_inner_size(window::MIN_SIZE)
             .with_drag_and_drop(true)
             // Started for an agent (`--control`): open without taking the user's keyboard focus.
             .with_active(control_port.is_none())
@@ -170,6 +171,9 @@ fn main() -> eframe::Result {
                 session.config = Some(std::sync::Arc::new(effectcraft_engine::config::DirConfig::new(dir)));
             }
             session.load_settings();
+            // Fit the window to its monitor, or put it back where it was (still hidden).
+            let saved_window = session.config.as_deref().and_then(window::load);
+            let opened = cc.winit_window().map(|w| window::restore(w, saved_window));
             let recovery = if control_port.is_none() { session.begin_recovery() } else { None };
             let project = files.iter().find(|f| is_project_file(f)).cloned();
             if let Some(p) = project {
@@ -264,6 +268,7 @@ fn main() -> eframe::Result {
                 #[cfg(target_os = "macos")]
                 apple_events: apple_events.connect(&cc.egui_ctx),
                 app,
+                window: window::Tracker::new(opened, saved_window, control_port.is_none()),
                 launch,
                 drawn: false,
             }))
@@ -333,6 +338,8 @@ struct Desktop {
     /// Documents opened from Finder, the Dock or `open` (macOS).
     #[cfg(target_os = "macos")]
     apple_events: apple_events::Opened,
+    /// The window's size and position, saved for the next launch.
+    window: window::Tracker,
     launch: launch_guard::Launch,
     /// The first frame was drawn (logged once).
     drawn: bool,
@@ -347,6 +354,7 @@ impl eframe::App for Desktop {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.app.ui(ui, frame);
+        self.window.frame(ui.ctx(), self.app.session.config.as_deref());
         if !self.drawn {
             self.drawn = true;
             log::info!("first frame drawn");
@@ -360,6 +368,7 @@ impl eframe::App for Desktop {
 
     fn on_exit(&mut self) {
         self.launch.exited();
+        self.window.save(self.app.session.config.as_deref());
         self.app.on_exit();
     }
 

@@ -350,6 +350,15 @@ pub enum Event {
     },
     /// Drop cached frames / renders (Edit ▸ Purge).
     PurgeCaches,
+    /// Put an image on the system clipboard (Composition ▸ Copy Frame to Clipboard): `rgba` is
+    /// `width` × `height` straight-alpha RGBA8 rows. Headless sessions ignore it; the pixels are
+    /// not serialized.
+    CopyImage {
+        width: u32,
+        height: u32,
+        #[serde(skip)]
+        rgba: Vec<u8>,
+    },
 }
 
 pub struct Session {
@@ -980,6 +989,7 @@ impl Session {
         self.roto_job = None;
         self.roto_pending.clear();
         self.drop_tasks();
+        self.script_ui.project_epoch = self.script_ui.project_epoch.wrapping_add(1);
         p.fix_next_id();
         upgrade_effects(&mut p);
         self.project = Arc::new(p);
@@ -1046,6 +1056,8 @@ mod tests;
 #[cfg(test)]
 mod tests_3d;
 #[cfg(test)]
+mod tests_anim_presets;
+#[cfg(test)]
 mod tests_anim_tools;
 #[cfg(test)]
 mod tests_camera_track;
@@ -1068,9 +1080,13 @@ mod tests_fidelity;
 #[cfg(test)]
 mod tests_frame_export;
 #[cfg(test)]
+mod tests_fuzz_open;
+#[cfg(test)]
 mod tests_key_metadata_order;
 #[cfg(test)]
 mod tests_keylight;
+#[cfg(test)]
+mod tests_limits;
 #[cfg(test)]
 mod tests_lottie;
 #[cfg(test)]
@@ -1124,6 +1140,11 @@ pub fn text_presets() -> Vec<(String, String)> {
     commands::text_preset_list()
 }
 
+/// Built-in animation presets (Effects & Presets ▸ * Animation Presets): (id, name, category).
+pub fn animation_presets() -> Vec<(String, String, String)> {
+    commands::builtin_preset_list()
+}
+
 pub fn text_families() -> Vec<String> {
     effectcraft_text::families().into_iter().map(|(f, _)| f).collect()
 }
@@ -1153,6 +1174,8 @@ pub struct FontRow {
     /// Settings ▸ Type ▸ Show Font Names in English is off.
     pub display: String,
     pub recent: bool,
+    /// A variable font (the menu's Variable Fonts filter keeps only these).
+    pub variable: bool,
 }
 
 /// Outline polylines of "Sample" set in `family` at `size` px (baseline at y = 0, y down), for
@@ -1193,14 +1216,21 @@ pub fn font_preview(family: &str, size: f64) -> Vec<Vec<[f32; 2]>> {
 }
 
 /// The Character panel's font menu: the recent fonts (Settings ▸ Type ▸ Number of Recent Fonts
-/// to Display), a separator, then every family.
+/// to Display), a separator, then every family. Each row says whether the family is variable,
+/// for the menu's Variable Fonts filter.
 pub fn font_menu(prefs: &prefs::Prefs) -> Vec<FontRow> {
     let all = text_families();
     let native = if prefs.type_.font_names_in_english { Default::default() } else { effectcraft_text::fonts::native_families() };
-    let row = |f: &String, recent: bool| FontRow { family: f.clone(), display: native.get(f).cloned().unwrap_or_else(|| f.clone()), recent };
+    let variable = effectcraft_text::fonts::variable_families();
+    let row = |f: &String, recent: bool| FontRow {
+        family: f.clone(),
+        display: native.get(f).cloned().unwrap_or_else(|| f.clone()),
+        recent,
+        variable: variable.contains(f),
+    };
     let mut out: Vec<FontRow> = prefs.recent_fonts_shown().iter().filter(|f| all.contains(f)).map(|f| row(f, true)).collect();
     if !out.is_empty() {
-        out.push(FontRow { family: String::new(), display: "-".into(), recent: false });
+        out.push(FontRow { family: String::new(), display: "-".into(), recent: false, variable: false });
     }
     out.extend(all.iter().map(|f| row(f, false)));
     out

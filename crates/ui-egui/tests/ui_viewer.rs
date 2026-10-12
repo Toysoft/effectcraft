@@ -601,6 +601,32 @@ fn fill_options_paint_the_next_shape() {
     assert_eq!(gfill.get("opacity").unwrap().value.as_f64(), 40.0);
 }
 
+/// With a shape layer selected, Fill Options' None switches its fill off and Solid Color turns
+/// it back on, and the Fill swatch shows the layer's kind (#732).
+#[test]
+fn fill_options_change_the_selected_shape_layer() {
+    let mut h = harness();
+    let l = h.state_mut().session.execute("layer.newShape", json!({"kind": "rect", "size": [100, 100], "position": [320, 180]})).unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+    h.run_steps(2);
+    let fill_on = |h: &Harness<'_, EffectcraftApp>| {
+        let layer = h.state().session.active_comp().unwrap().layer(LayerId(l)).unwrap().clone();
+        layer.props.group("contents/group/contents/fill").unwrap().enabled
+    };
+    assert!(fill_on(&h));
+    for (kind, on) in [("none", false), ("solid", true)] {
+        let at = rect(&h, "header.fillOptions").center();
+        click(&mut h, at);
+        let at = rect(&h, &format!("header.fillOptions.{kind}")).center();
+        click(&mut h, at);
+        h.input_mut().events.push(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        h.run_steps(3);
+        assert_eq!(fill_on(&h), on, "{kind}");
+        assert_eq!(h.state().session.state.shape_tool.fill.kind.id(), kind);
+    }
+}
+
 #[test]
 fn shape_pen_draws_a_closed_shape_layer() {
     let mut h = harness();

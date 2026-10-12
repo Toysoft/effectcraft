@@ -540,9 +540,23 @@ text, disables the expression and shows a warning, like After Effects. `sampleIm
 sampled layer through the evaluating renderer's footage source (`EvalCtx::footage`), cached per
 thread and frame; `footage(name)` reads data footage (JSON, CSV, TSV imported with File ▸ Import,
 text kept in the project) through `sourceData`, `sourceText` and `dataValue`. `expr.errors`
-lists failing expressions for the viewer's error bar. Each thread keeps one boa context; boa
+lists failing expressions on demand. The viewer's error bar uses the same checks against an
+immutable project snapshot, after 150 ms without editing, pointer interaction or playback.
+Native builds run these automatic checks on one persistent worker; layout and paint only read
+completed results. Requests are coalesced per comp, cancelled between properties when obsolete,
+and bounded to eight comp entries. Results must match the current project, revision and time.
+Disabling Show Expression Error Banner cancels automatic checks. Non-solo layers still receive
+diagnostics, including disabled expressions with syntax errors. The single-threaded web build
+shares the cache and debounce but evaluates one scan on the UI thread after interaction stops.
+Each thread keeps one boa context; boa
 leaves values on its stack whenever an exception unwinds through call frames (every pending
 host request does), so a run that hits the stack limit gets a fresh context and is retried once.
+
+Snapping memoizes expression values while collecting one immutable set of targets. Bounds,
+vertices and transforms share those values; the cache is discarded before the next query, so
+time changes and edits always use current geometry. Native timeline disk-cache indicators also
+request missing content hashes in the background, coalescing edits per comp. Their blue bars
+appear after the key is ready instead of serializing composition content during painting.
 
 ## 5a. Scripting
 
