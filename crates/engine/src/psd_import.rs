@@ -238,7 +238,8 @@ fn smart_object_layer(proj: &mut Project, cx: &mut Ctx, comp: &Comp, index: usiz
         let bb = so.placed_bounds(cw as f64, ch as f64);
         let area = ((bb[2] - bb[0]) * (bb[3] - bb[1])).max(1.0);
         let k = ((cw as f64 * ch as f64) / area).sqrt().clamp(1.0, 4.0);
-        let (w, h) = so.placed_size(cw as f64, ch as f64, k);
+        // At most 4× the document across and 2^24 pixels, however far the file moves a corner.
+        let (k, (w, h)) = so.bake_scale(cw as f64, ch as f64, k, (cx.psd.width, cx.psd.height));
         (w, h, k, bb)
     } else {
         (cw, ch, 1.0, [0.0; 4])

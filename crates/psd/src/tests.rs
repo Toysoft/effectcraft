@@ -340,9 +340,10 @@ fn non_finite_32_bit_samples_become_finite() {
     d.layers = vec![WLayer::solid("L", Rect::new(0, 0, 4, 4), [0.5, 0.5, 0.5, 1.0])];
     let p = Psd::parse(write(&d)).unwrap();
     let raw: Vec<u8> = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.25].iter().flat_map(|v| v.to_be_bytes()).collect();
-    let s = p.samples(&raw, 4, 1);
+    let mut s = vec![f32::NAN; 4];
+    p.for_each_sample(&raw, 4, 1, |i, v| s[i] = v);
     assert_eq!(s, vec![0.0, 1.0, 0.0, 0.25]);
-    assert!(p.to_rgb(&[Some(s.clone()), Some(s.clone()), Some(s)], 1).iter().all(|v| v.is_finite()));
+    assert!(p.rgb_from([s[1], s[1], s[1], 0.0]).iter().all(|v| v.is_finite()));
 }
 
 #[test]

@@ -76,7 +76,7 @@ fn ref_decode_channel(p: &Psd, offset: usize, len: usize, w: usize, h: usize) ->
         }
         c => return Err(Error::Unsupported(format!("compression {c}"))),
     };
-    Ok(p.samples(&raw, w, h))
+    Ok(p.ref_samples(&raw, w, h))
 }
 
 fn ref_composite(p: &Psd) -> Result<Pixels> {
@@ -92,7 +92,7 @@ fn ref_composite(p: &Psd) -> Result<Pixels> {
     match comp {
         0 => {
             for pl in planes.iter_mut().take(want) {
-                *pl = Some(p.samples(r.bytes(rowb * h)?, w, h));
+                *pl = Some(p.ref_samples(r.bytes(rowb * h)?, w, h));
             }
         }
         1 => {
@@ -105,7 +105,7 @@ fn ref_composite(p: &Psd) -> Result<Pixels> {
                 for row in 0..h {
                     unpack_bits(r.bytes(counts[c * h + row])?, rowb, &mut out)?;
                 }
-                *pl = Some(p.samples(&out, w, h));
+                *pl = Some(p.ref_samples(&out, w, h));
             }
         }
         2 | 3 => {
@@ -116,7 +116,7 @@ fn ref_composite(p: &Psd) -> Result<Pixels> {
                 if comp == 3 {
                     ref_unpredict(p.depth, &mut plane, w, h);
                 }
-                *pl = Some(p.samples(&plane, w, h));
+                *pl = Some(p.ref_samples(&plane, w, h));
             }
         }
         c => return Err(Error::Unsupported(format!("compression {c}"))),
@@ -124,7 +124,7 @@ fn ref_composite(p: &Psd) -> Result<Pixels> {
     let alpha = if p.merged_alpha && nch > cc { planes[cc].take() } else { None };
     let mut data = Vec::with_capacity(w * h);
     for i in 0..w * h {
-        let [r, g, b] = p.to_rgb(&planes, i);
+        let [r, g, b] = p.ref_to_rgb(&planes, i);
         let a = alpha.as_ref().map_or(1.0, |a| a[i]);
         data.push([r, g, b, a]);
     }
@@ -175,7 +175,7 @@ fn ref_layer_pixels(p: &Psd, index: usize, canvas: bool) -> Result<Pixels> {
                 let i = y * sw + x;
                 let (rgb, a) = match fill {
                     Some(f) if !l.has_pixels() => (f, 1.0),
-                    _ => (p.to_rgb(&planes, i), alpha.as_ref().map_or(1.0, |a| a[i])),
+                    _ => (p.ref_to_rgb(&planes, i), alpha.as_ref().map_or(1.0, |a| a[i])),
                 };
                 out[dy * ow + dx] = [rgb[0], rgb[1], rgb[2], a];
             }
@@ -463,7 +463,7 @@ fn raw_planes_are_borrowed_and_zip_planes_are_unpredicted_in_place() {
     let c = q.layers[0].channels[0];
     let mut r = Reader::at(&q.data, c.offset);
     let comp = r.u16().unwrap();
-    let plane = q.plane_bytes(comp, &mut r, 40, 30).unwrap();
+    let plane = q.plane_bytes(comp, &mut r, 40, 30, &mut Budget::new(u64::MAX)).unwrap();
     let Cow::Borrowed(b) = plane else { panic!("raw plane was copied") };
     let file = q.data.as_ptr_range();
     assert!(file.contains(&b.as_ptr()) && b.len() == 1200);

@@ -12,6 +12,10 @@
 use crate::descriptor::{DValue, Descriptor};
 use crate::{Pixels, SmartObject};
 
+/// The most pixels a baked smart object may have: 2^24 (256 MiB as float RGBA). The size comes
+/// from the file's transform, which is untrusted.
+pub const MAX_BAKE_PIXELS: u64 = 1 << 24;
+
 /// A placed layer's warp.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Warp {
@@ -281,9 +285,27 @@ impl SmartObject {
         size_for(self.placed_bounds(w, h), k)
     }
 
+    /// The scale and size to bake a `w`×`h` content at, wanting `k` pixels per document pixel but
+    /// never more than [`MAX_BAKE_PIXELS`] pixels, nor more than 4× the `doc` size across either
+    /// way: a quad corner far outside the document lowers `k` (possibly below 1) instead of asking
+    /// for a gigantic image. Returns the scale actually used and the size in pixels.
+    pub fn bake_scale(&self, w: f64, h: f64, k: f64, doc: (u32, u32)) -> (f64, (u32, u32)) {
+        let bb = self.placed_bounds(w, h);
+        let (bw, bh) = ((bb[2] - bb[0]).max(1.0), (bb[3] - bb[1]).max(1.0));
+        if !(bw.is_finite() && bh.is_finite() && k.is_finite() && k > 0.0) {
+            return (1.0, (1, 1));
+        }
+        let (max_w, max_h) = ((f64::from(doc.0) * 4.0).max(1.0), (f64::from(doc.1) * 4.0).max(1.0));
+        let capped = k.min(max_w / bw).min(max_h / bh).min((MAX_BAKE_PIXELS as f64 / (bw * bh)).sqrt());
+        // Rounding up could step over a cap, so a lowered scale rounds down.
+        let side = |len: f64| if capped < k { (len * capped).floor() } else { (len * capped).ceil() }.clamp(1.0, 16384.0) as u32;
+        (capped, (side(bw), side(bh)))
+    }
+
     /// Bake the content (straight RGBA) as placed: warped and mapped by the quad, rendered at
     /// `k` pixels per document pixel (into `size` pixels when given; see [`Self::placed_size`]).
-    /// Returns the pixels and their document-space origin.
+    /// Returns the pixels and their document-space origin. `None` when the content is empty or
+    /// the baked image would exceed [`MAX_BAKE_PIXELS`].
     pub fn render_placed(&self, content: &Pixels, k: f64, size: Option<(u32, u32)>) -> Option<(Pixels, [f64; 2])> {
         let (cw, ch) = (content.width as f64, content.height as f64);
         if content.width == 0 || content.height == 0 {
@@ -297,6 +319,7 @@ impl SmartObject {
             None => size_for(bb, k),
         };
         let (ow, oh) = (ow as usize, oh as usize);
+        let count = ow.checked_mul(oh).filter(|&c| c as u64 <= MAX_BAKE_PIXELS)?;
         // A forward grid, filled triangle by triangle with inverse barycentric sampling.
         let n = 48usize;
         let mut dst = Vec::with_capacity((n + 1) * (n + 1));
@@ -309,7 +332,9 @@ impl SmartObject {
                 src.push(s);
             }
         }
-        let mut out = vec![[0.0f32; 4]; ow * oh];
+        let mut out: Vec<[f32; 4]> = Vec::new();
+        out.try_reserve_exact(count).ok()?;
+        out.resize(count, [0.0; 4]);
         let sample = |x: f64, y: f64| -> [f32; 4] {
             let (fx, fy) = ((x - 0.5).clamp(0.0, cw - 1.0), (y - 0.5).clamp(0.0, ch - 1.0));
             let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
@@ -453,5 +478,36 @@ mod tests {
             let w = Warp { cols, rows, ..base.clone() };
             assert_eq!(w.apply([5.0, 5.0], 20.0, 10.0), [5.0, 5.0]);
         }
+    }
+
+    #[test]
+    fn an_absurd_quad_corner_bakes_within_four_times_the_document_and_2_pow_24_pixels() {
+        let doc = (1920u32, 1080u32);
+        for far in [1e4, 1e6, 1e12] {
+            let s = SmartObject { uuid: "x".into(), quad: [[0.0, 0.0], [far, 5.0], [far, far], [0.0, 20.0]], size: None, warp: None };
+            assert!(s.needs_bake());
+            // What the importer asks for: the unbounded size is the 16384² clamp, 4 GiB as float RGBA.
+            assert_eq!(s.placed_size(100.0, 100.0, 4.0), (16384, 16384));
+            let (k, (w, h)) = s.bake_scale(100.0, 100.0, 4.0, doc);
+            assert!(k > 0.0 && k <= 4.0, "{k}");
+            assert!(w <= doc.0 * 4 && h <= doc.1 * 4, "{w}x{h}");
+            assert!(u64::from(w) * u64::from(h) <= MAX_BAKE_PIXELS, "{w}x{h}");
+        }
+        // A quad inside the document keeps the scale and the size it always had.
+        let s = SmartObject { uuid: "x".into(), quad: [[0.0, 0.0], [400.0, 50.0], [400.0, 150.0], [0.0, 200.0]], size: None, warp: None };
+        let (k, size) = s.bake_scale(100.0, 100.0, 2.0, doc);
+        assert_eq!((k, size), (2.0, s.placed_size(100.0, 100.0, 2.0)));
+        // Not-a-number corners stay small too.
+        let s = SmartObject { uuid: "x".into(), quad: [[f64::NAN; 2]; 4], size: None, warp: None };
+        let (_, (w, h)) = s.bake_scale(100.0, 100.0, 4.0, doc);
+        assert!(u64::from(w) * u64::from(h) <= MAX_BAKE_PIXELS);
+    }
+
+    #[test]
+    fn render_placed_refuses_an_output_over_the_pixel_cap() {
+        let content = Pixels { width: 2, height: 1, data: vec![[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]] };
+        let s = SmartObject { uuid: "x".into(), quad: [[0.0, 0.0], [40.0, 5.0], [40.0, 15.0], [0.0, 20.0]], size: None, warp: None };
+        assert!(s.render_placed(&content, 1.0, Some((16384, 16384))).is_none());
+        assert!(s.render_placed(&content, 1.0, Some((u32::MAX, u32::MAX))).is_none());
     }
 }

@@ -57,6 +57,101 @@ fn decode_pixels(w: usize, h: usize) -> Result<usize> {
     }
 }
 
+fn too_large(w: usize, h: usize) -> Error {
+    Error::Unsupported(format!("{w}×{h} pixels is too large to decode"))
+}
+
+/// What one decode (the composite, or one layer) may hold in memory at once: 4 GiB, 1 GiB where
+/// pointers are 32 bits wide (WebAssembly). [`MAX_DECODE_PIXELS`] bounds one image; this bounds
+/// the sum of the buffers a decode keeps alive together.
+#[cfg(target_pointer_width = "32")]
+const DECODE_BUDGET: u64 = 1 << 30;
+#[cfg(not(target_pointer_width = "32"))]
+const DECODE_BUDGET: u64 = 4 << 30;
+
+/// The bytes the buffers of one decode hold right now, against a limit. A decode charges a buffer
+/// before it allocates it (and releases it when it drops it), so a file that would need more
+/// than the limit fails with an error instead of an out-of-memory abort.
+struct Budget {
+    limit: u64,
+    live: u64,
+}
+
+impl Budget {
+    fn new(limit: u64) -> Budget {
+        Budget { limit, live: 0 }
+    }
+
+    fn charge(&mut self, bytes: u64) -> Result<()> {
+        self.check(bytes)?;
+        self.live += bytes;
+        Ok(())
+    }
+
+    /// Whether `bytes` more would still fit, without taking them. A decode checks its whole
+    /// expected peak first, so one that cannot fit fails before it has allocated anything.
+    fn check(&self, bytes: u64) -> Result<()> {
+        match self.live.checked_add(bytes) {
+            Some(total) if total <= self.limit => Ok(()),
+            _ => {
+                const MIB: u64 = 1 << 20;
+                Err(Error::Unsupported(format!(
+                    "decoding needs {} MiB more with {} MiB in use, over the {} MiB memory budget",
+                    bytes / MIB,
+                    self.live / MIB,
+                    self.limit / MIB
+                )))
+            }
+        }
+    }
+
+    fn release(&mut self, bytes: u64) {
+        self.live = self.live.saturating_sub(bytes);
+    }
+
+    /// An empty vector with room for `n` items, charged.
+    fn vec<T>(&mut self, n: usize) -> Result<Vec<T>> {
+        self.charge((n as u64).saturating_mul(std::mem::size_of::<T>() as u64))?;
+        let mut v = Vec::new();
+        v.try_reserve_exact(n).map_err(|_| Error::Unsupported(format!("out of memory for {n} items")))?;
+        Ok(v)
+    }
+
+    /// `n` copies of `value`, charged.
+    fn filled<T: Clone>(&mut self, n: usize, value: T) -> Result<Vec<T>> {
+        let mut v = self.vec::<T>(n)?;
+        v.resize(n, value);
+        Ok(v)
+    }
+}
+
+/// Inflate a zlib stream to at most `limit` bytes.
+fn inflate(src: &[u8], limit: usize) -> Result<Vec<u8>> {
+    miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(src, limit).map_err(|e| Error::Invalid(format!("zip: {e:?}")))
+}
+
+/// Give back what a channel buffer from `Psd::channel_bytes` / `Psd::decode_plane` was charged:
+/// a borrowed one (uncompressed data, or a plane of an inflated stream charged as a whole) was not.
+fn release_bytes(budget: &mut Budget, raw: &Cow<'_, [u8]>) {
+    if let Cow::Owned(v) = raw {
+        budget.release(v.len() as u64);
+    }
+}
+
+/// A 32-bit float sample made safe to use: NaN reads as 0, +inf as white (1.0, like the integer
+/// depths' maximum), -inf as 0.
+fn finite_sample(v: f32) -> f32 {
+    if v.is_nan() {
+        0.0
+    } else if v == f32::INFINITY {
+        1.0
+    } else if v == f32::NEG_INFINITY {
+        0.0
+    } else {
+        v
+    }
+}
+
 /// Whether `bytes` start like a Photoshop document.
 pub fn is_psd(bytes: &[u8]) -> bool {
     bytes.len() >= 6 && &bytes[..4] == b"8BPS" && matches!(u16::from_be_bytes([bytes[4], bytes[5]]), 1 | 2)
@@ -830,26 +925,29 @@ impl Psd {
         }
     }
 
-    /// Decode one channel of `w`×`h` samples at `offset` (compression field first). Values 0..1.
-    fn decode_channel(&self, offset: usize, len: usize, w: usize, h: usize) -> Result<Vec<f32>> {
+    /// The raw big-endian bytes of one channel of `w`×`h` samples at `offset` (compression field
+    /// first): `row_bytes(w) × h` of them with the compression and the prediction undone.
+    /// Uncompressed data is borrowed from the file, not copied; any other buffer is charged to
+    /// `budget` and the caller releases it (see [`release_bytes`]) once it is dropped.
+    fn channel_bytes(&self, offset: usize, len: usize, w: usize, h: usize, budget: &mut Budget) -> Result<Cow<'_, [u8]>> {
         let end = offset.checked_add(len).filter(|&e| e <= self.data.len()).ok_or(Error::Truncated)?;
-        let mut r = Reader::at(&self.data[..end], offset);
+        let mut r = Reader::at(self.data.get(..end).ok_or(Error::Truncated)?, offset);
         let comp = r.u16()?;
         decode_pixels(w, h)?;
-        let raw = self.plane_bytes(comp, &mut r, w, h)?;
-        Ok(self.samples(&raw, w, h))
+        self.plane_bytes(comp, &mut r, w, h, budget)
     }
 
     /// The raw bytes (`row_bytes(w)` × `h`, ZIP prediction undone) of one channel whose pixel data
     /// follows `r`'s position (after the compression field). Uncompressed data is borrowed, not
-    /// copied.
-    fn plane_bytes<'a>(&self, comp: u16, r: &mut Reader<'a>, w: usize, h: usize) -> Result<Cow<'a, [u8]>> {
+    /// copied; the other buffers are charged to `budget`.
+    fn plane_bytes<'a>(&self, comp: u16, r: &mut Reader<'a>, w: usize, h: usize, budget: &mut Budget) -> Result<Cow<'a, [u8]>> {
         let rowb = self.row_bytes(w);
-        Ok(match self.open_planes(comp, r, 1, 1, w, h)? {
-            PlaneStream::Raw => Cow::Borrowed(r.bytes(rowb * h)?),
-            PlaneStream::Rle(counts) => Cow::Owned(Self::unpack_plane(&counts, 0, r, rowb, h)?),
+        let size = rowb.checked_mul(h).ok_or_else(|| too_large(w, h))?;
+        Ok(match self.open_planes(comp, r, 1, 1, w, h, budget)? {
+            PlaneStream::Raw => Cow::Borrowed(r.bytes(size)?),
+            PlaneStream::Rle(counts) => Cow::Owned(Self::unpack_plane(&counts, 0, r, rowb, h, budget)?),
             PlaneStream::Zip(mut v) => {
-                v.resize(rowb * h, 0);
+                v.resize(size, 0);
                 self.zip_plane(comp, &mut v, 0, w, h)?;
                 Cow::Owned(v)
             }
@@ -858,9 +956,11 @@ impl Psd {
 
     /// Prepare the pixel data at `r` (just after the compression field) of `total` planes of
     /// `w`×`h` samples, of which the first `want` are decoded: the RLE row sizes of every plane,
-    /// or the inflated ZIP data, which holds all planes one after another.
-    fn open_planes(&self, comp: u16, r: &mut Reader, total: usize, want: usize, w: usize, h: usize) -> Result<PlaneStream> {
-        let rowb = self.row_bytes(w);
+    /// or the inflated ZIP data, which holds all planes one after another (charged to `budget`
+    /// before it is inflated).
+    #[allow(clippy::too_many_arguments)]
+    fn open_planes(&self, comp: u16, r: &mut Reader, total: usize, want: usize, w: usize, h: usize, budget: &mut Budget) -> Result<PlaneStream> {
+        let size = self.row_bytes(w).checked_mul(h).ok_or_else(|| too_large(w, h))?;
         Ok(match comp {
             0 => PlaneStream::Raw,
             1 => {
@@ -873,8 +973,10 @@ impl Psd {
             }
             2 | 3 => {
                 let rest = r.bytes(r.remaining())?;
-                let v = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(rest, want * rowb * h).map_err(|e| Error::Invalid(format!("zip: {e:?}")))?;
-                PlaneStream::Zip(v)
+                // One stream holds every plane: what it may decode to is what they need.
+                let all = size.checked_mul(want).ok_or_else(|| too_large(w, h))?;
+                budget.charge(all as u64)?;
+                PlaneStream::Zip(inflate(rest, all)?)
             }
             c => return Err(Error::Unsupported(format!("compression {c}"))),
         })
@@ -882,19 +984,32 @@ impl Psd {
 
     /// The raw bytes (`row_bytes(w)` × `h`, ZIP prediction undone) of plane `c`: raw and RLE
     /// planes are read from `r` in order, raw ones borrowed from the file data, ZIP ones from the
-    /// inflated buffer, un-predicted in place.
-    fn decode_plane<'x, 'a: 'x>(&self, comp: u16, planes: &'x mut PlaneStream, r: &mut Reader<'a>, c: usize, w: usize, h: usize) -> Result<Cow<'x, [u8]>> {
+    /// inflated buffer (un-predicted in place; already charged by `open_planes`), RLE ones charged
+    /// to `budget`.
+    #[allow(clippy::too_many_arguments)]
+    fn decode_plane<'x, 'a: 'x>(
+        &self,
+        comp: u16,
+        planes: &'x mut PlaneStream,
+        r: &mut Reader<'a>,
+        c: usize,
+        w: usize,
+        h: usize,
+        budget: &mut Budget,
+    ) -> Result<Cow<'x, [u8]>> {
         let rowb = self.row_bytes(w);
+        let size = rowb.checked_mul(h).ok_or_else(|| too_large(w, h))?;
         Ok(match planes {
-            PlaneStream::Raw => Cow::Borrowed(r.bytes(rowb * h)?),
-            PlaneStream::Rle(counts) => Cow::Owned(Self::unpack_plane(counts, c, r, rowb, h)?),
+            PlaneStream::Raw => Cow::Borrowed(r.bytes(size)?),
+            PlaneStream::Rle(counts) => Cow::Owned(Self::unpack_plane(counts, c, r, rowb, h, budget)?),
             PlaneStream::Zip(v) => Cow::Borrowed(self.zip_plane(comp, v, c, w, h)?),
         })
     }
 
-    /// Unpack the `h` RLE rows of plane `c` (row byte counts `counts`, plane after plane).
-    fn unpack_plane(counts: &[usize], c: usize, r: &mut Reader, rowb: usize, h: usize) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(rowb * h);
+    /// Unpack the `h` RLE rows of plane `c` (row byte counts `counts`, plane after plane) into a
+    /// buffer charged to `budget`.
+    fn unpack_plane(counts: &[usize], c: usize, r: &mut Reader, rowb: usize, h: usize, budget: &mut Budget) -> Result<Vec<u8>> {
+        let mut out = budget.vec::<u8>(rowb.checked_mul(h).ok_or(Error::Truncated)?)?;
         for row in 0..h {
             let n = *counts.get(c * h + row).ok_or(Error::Truncated)?;
             unpack_bits(r.bytes(n)?, rowb, &mut out)?;
@@ -910,6 +1025,19 @@ impl Psd {
             self.unpredict(plane, w, h);
         }
         Ok(plane)
+    }
+
+    /// One channel as `w * h` floats (0..1), charged to `budget` (the caller releases it).
+    fn channel_floats(&self, offset: usize, len: usize, w: usize, h: usize, budget: &mut Budget) -> Result<Vec<f32>> {
+        let raw = self.channel_bytes(offset, len, w, h, budget)?;
+        let mut out = budget.filled(decode_pixels(w, h)?, 0.0f32)?;
+        self.for_each_sample(&raw, w, h, |i, v| {
+            if let Some(o) = out.get_mut(i) {
+                *o = v;
+            }
+        });
+        release_bytes(budget, &raw);
+        Ok(out)
     }
 
     fn row_bytes(&self, w: usize) -> usize {
@@ -956,47 +1084,31 @@ impl Psd {
         }
     }
 
-    fn samples(&self, raw: &[u8], w: usize, h: usize) -> Vec<f32> {
+    /// Hand every sample of `raw` (`w`×`h`, row-major, in order) to `f` as a float. Samples a short
+    /// `raw` does not have are not reported.
+    fn for_each_sample(&self, raw: &[u8], w: usize, h: usize, mut f: impl FnMut(usize, f32)) {
+        let n = w.saturating_mul(h);
         match self.depth {
             1 => {
                 let rowb = w.div_ceil(8);
-                let mut out = Vec::with_capacity(w * h);
                 for y in 0..h {
                     for x in 0..w {
                         let b = raw.get(y * rowb + x / 8).copied().unwrap_or(0);
                         // 1 = black.
-                        out.push(if b & (0x80 >> (x % 8)) != 0 { 0.0 } else { 1.0 });
+                        f(y * w + x, if b & (0x80 >> (x % 8)) != 0 { 0.0 } else { 1.0 });
                     }
                 }
-                out
             }
-            16 => raw.as_chunks::<2>().0.iter().take(w * h).map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect(),
+            16 => raw.as_chunks::<2>().0.iter().take(n).enumerate().for_each(|(i, c)| f(i, u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0)),
             // NaN reads as 0, +inf as white (1.0, like the integer depths' maximum), -inf as 0.
-            32 => raw
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .take(w * h)
-                .map(|c| {
-                    let v = f32::from_be_bytes([c[0], c[1], c[2], c[3]]);
-                    if v.is_nan() {
-                        0.0
-                    } else if v == f32::INFINITY {
-                        1.0
-                    } else if v == f32::NEG_INFINITY {
-                        0.0
-                    } else {
-                        v
-                    }
-                })
-                .collect(),
-            _ => raw.iter().take(w * h).map(|&b| b as f32 / 255.0).collect(),
+            32 => raw.as_chunks::<4>().0.iter().take(n).enumerate().for_each(|(i, c)| f(i, finite_sample(f32::from_be_bytes([c[0], c[1], c[2], c[3]])))),
+            _ => raw.iter().take(n).enumerate().for_each(|(i, &b)| f(i, b as f32 / 255.0)),
         }
     }
 
-    /// Convert colour channels (in the document's mode) to RGB.
-    fn to_rgb(&self, ch: &[Option<Vec<f32>>], i: usize) -> [f32; 3] {
-        let g = |k: usize| ch.get(k).and_then(|c| c.as_ref()).map_or(0.0, |c| c[i]);
+    /// Convert colour values (the document mode's channels, missing ones 0) to RGB.
+    fn rgb_from(&self, v: [f32; 4]) -> [f32; 3] {
+        let g = |k: usize| v.get(k).copied().unwrap_or(0.0);
         let rgb = match self.mode {
             ColorMode::Rgb => [g(0), g(1), g(2)],
             ColorMode::Cmyk => {
@@ -1014,26 +1126,69 @@ impl Psd {
         if self.depth == 32 && self.mode != ColorMode::Lab { rgb.map(srgb_encode) } else { rgb }
     }
 
+    /// Write merged-image channel `c` (raw bytes) into the result: the first three colour channels
+    /// and the alpha channel into their slot of a pixel, the fourth CMYK channel into `black`.
+    fn store_merged_channel(&self, c: usize, raw: &[u8], data: &mut [[f32; 4]], black: &mut Option<Vec<f32>>) {
+        let (w, h, cc) = (self.width as usize, self.height as usize, self.mode.color_channels());
+        if c < cc.min(3) {
+            self.for_each_sample(raw, w, h, |i, v| {
+                if let Some(p) = data.get_mut(i) {
+                    p[c] = v;
+                }
+            });
+        } else if c == 3 && c < cc {
+            if let Some(k) = black {
+                self.for_each_sample(raw, w, h, |i, v| {
+                    if let Some(o) = k.get_mut(i) {
+                        *o = v;
+                    }
+                });
+            }
+        } else if c == cc && self.merged_alpha {
+            self.for_each_sample(raw, w, h, |i, v| {
+                if let Some(p) = data.get_mut(i) {
+                    p[3] = v;
+                }
+            });
+        }
+    }
+
     /// The merged (flattened) image.
     pub fn composite(&self) -> Result<Pixels> {
+        self.composite_with_budget(DECODE_BUDGET)
+    }
+
+    /// [`Self::composite`] with at most `limit` bytes live at once. The channels are written
+    /// straight into the result, so the peak is the result (16 bytes a pixel), the CMYK black
+    /// channel, and the one buffer a channel (or, for ZIP, all channels) decodes through.
+    pub(crate) fn composite_with_budget(&self, limit: u64) -> Result<Pixels> {
+        let mut budget = Budget::new(limit);
         let (w, h) = (self.width as usize, self.height as usize);
-        decode_pixels(w, h)?;
+        let n = decode_pixels(w, h)?;
         let mut r = Reader::at(&self.data, self.merged_offset);
         let comp = r.u16()?;
         let nch = self.channels as usize;
         let cc = self.mode.color_channels();
         let want = (cc + usize::from(self.merged_alpha)).min(nch);
-        let mut planes: Vec<Option<Vec<f32>>> = vec![None; nch];
-        let mut stream = self.open_planes(comp, &mut r, nch, want, w, h)?;
-        for (c, p) in planes.iter_mut().enumerate().take(want) {
-            *p = Some(self.samples(&self.decode_plane(comp, &mut stream, &mut r, c, w, h)?, w, h));
+        let rowb = self.row_bytes(w);
+        let size = rowb.checked_mul(h).ok_or_else(|| too_large(w, h))?;
+        // The peak: the result, the CMYK black channel and what the channels decode through.
+        let black_bytes = if self.mode == ColorMode::Cmyk && want > 3 { 4 * n as u64 } else { 0 };
+        let transient = if matches!(comp, 2 | 3) { (size as u64).saturating_mul(want as u64) } else { size as u64 };
+        budget.check((16 * n as u64).saturating_add(black_bytes).saturating_add(transient))?;
+        // Opaque black until a channel says otherwise.
+        let mut data = budget.filled(n, [0.0f32, 0.0, 0.0, 1.0])?;
+        let mut black = if self.mode == ColorMode::Cmyk && want > 3 { Some(budget.filled(n, 0.0f32)?) } else { None };
+        let mut stream = self.open_planes(comp, &mut r, nch, want, w, h, &mut budget)?;
+        for c in 0..want {
+            let raw = self.decode_plane(comp, &mut stream, &mut r, c, w, h, &mut budget)?;
+            self.store_merged_channel(c, &raw, &mut data, &mut black);
+            release_bytes(&mut budget, &raw);
         }
-        let alpha = if self.merged_alpha && nch > cc { planes[cc].take() } else { None };
-        let mut data = Vec::with_capacity(w * h);
-        for i in 0..w * h {
-            let [r, g, b] = self.to_rgb(&planes, i);
-            let a = alpha.as_ref().map_or(1.0, |a| a[i]);
-            data.push([r, g, b, a]);
+        for (i, p) in data.iter_mut().enumerate() {
+            let k = black.as_ref().and_then(|k| k.get(i)).copied().unwrap_or(0.0);
+            let [r, g, b] = self.rgb_from([p[0], p[1], p[2], k]);
+            *p = [r, g, b, p[3]];
         }
         Ok(Pixels { width: w as u32, height: h as u32, data })
     }
@@ -1041,6 +1196,14 @@ impl Psd {
     /// One layer's pixels with its layer mask (and vector-less fill colour) applied to alpha.
     /// `canvas`: document-sized with the layer in place; otherwise the layer's own bounds.
     pub fn layer_pixels(&self, index: usize, canvas: bool) -> Result<Pixels> {
+        self.layer_pixels_with_budget(index, canvas, DECODE_BUDGET)
+    }
+
+    /// [`Self::layer_pixels`] with at most `limit` bytes live at once: the result (16 bytes a
+    /// pixel) with the channels written straight into it, the CMYK black channel, the one channel
+    /// being decoded, and the mask.
+    pub(crate) fn layer_pixels_with_budget(&self, index: usize, canvas: bool, limit: u64) -> Result<Pixels> {
+        let mut budget = Budget::new(limit);
         let l = self.layers.get(index).ok_or_else(|| Error::Invalid(format!("no layer {index}")))?;
         let doc = Rect { top: 0, left: 0, bottom: self.height as i32, right: self.width as i32 };
         // Fill layers often have no pixel data: they cover the canvas (or the mask).
@@ -1054,22 +1217,26 @@ impl Psd {
             fill_rect
         };
         let (ow, oh) = (out_rect.width() as usize, out_rect.height() as usize);
-        let mut out = vec![[0.0f32; 4]; decode_pixels(ow, oh)?];
+        let n = decode_pixels(ow, oh)?;
         let src = fill_rect;
         let (sw, sh) = (src.width() as usize, src.height() as usize);
-        if sw > 0 && sh > 0 {
-            let mut planes: Vec<Option<Vec<f32>>> = vec![None; self.mode.color_channels()];
-            let mut alpha = None;
-            if l.has_pixels() {
-                for c in &l.channels {
-                    match c.id {
-                        -1 => alpha = Some(self.decode_channel(c.offset, c.len, sw, sh)?),
-                        id if id >= 0 && (id as usize) < planes.len() => planes[id as usize] = Some(self.decode_channel(c.offset, c.len, sw, sh)?),
-                        _ => {}
-                    }
-                }
+        // The peak: the result, then either the CMYK black channel with the channel being decoded,
+        // or the mask as floats with its bytes. Checked before anything is allocated.
+        let plane = |w: usize, h: usize| (self.row_bytes(w) as u64).saturating_mul(h as u64);
+        let mut pixels_peak = 0u64;
+        if l.has_pixels() && sw > 0 && sh > 0 {
+            pixels_peak = plane(sw, sh).saturating_add(if self.mode == ColorMode::Cmyk { 4 * n as u64 } else { 0 });
+        }
+        let mut mask_peak = 0u64;
+        if let Some(m) = l.mask.filter(|m| !m.disabled) {
+            let (mw, mh) = (m.rect.width() as usize, m.rect.height() as usize);
+            if mw > 0 && mh > 0 && l.channels.iter().any(|c| c.id == -2) {
+                mask_peak = plane(mw, mh).saturating_add((mw as u64).saturating_mul(mh as u64).saturating_mul(4));
             }
-            let fill = l.fill.map(|c| c.map(|v| v as f32));
+        }
+        budget.check((16 * n as u64).saturating_add(pixels_peak.max(mask_peak)))?;
+        let mut out = budget.filled(n, [0.0f32; 4])?;
+        if sw > 0 && sh > 0 {
             // The source rows / columns that land inside the output (64-bit: file bounds can span
             // the whole i32 range).
             let span = |s0: i32, n: usize, o0: i32, on: usize| {
@@ -1080,16 +1247,77 @@ impl Psd {
             };
             let (ys, oy) = span(src.top, sh, out_rect.top, oh);
             let (xs, ox) = span(src.left, sw, out_rect.left, ow);
-            for y in ys {
-                let dy = (y as i64 - oy) as usize;
-                for x in xs.clone() {
-                    let dx = (x as i64 - ox) as usize;
-                    let i = y * sw + x;
-                    let (rgb, a) = match fill {
-                        Some(f) if !l.has_pixels() => (f, 1.0),
-                        _ => (self.to_rgb(&planes, i), alpha.as_ref().map_or(1.0, |a| a[i])),
-                    };
-                    out[dy * ow + dx] = [rgb[0], rgb[1], rgb[2], a];
+            let dest = |y: usize, x: usize| (y as i64 - oy) as usize * ow + (x as i64 - ox) as usize;
+            let fill = l.fill.map(|c| c.map(|v| v as f32));
+            match fill {
+                Some(f) if !l.has_pixels() => {
+                    for y in ys {
+                        for x in xs.clone() {
+                            if let Some(p) = out.get_mut(dest(y, x)) {
+                                *p = [f[0], f[1], f[2], 1.0];
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // Opaque unless there is an alpha channel.
+                    for y in ys.clone() {
+                        for x in xs.clone() {
+                            if let Some(p) = out.get_mut(dest(y, x)) {
+                                p[3] = 1.0;
+                            }
+                        }
+                    }
+                    let cc = self.mode.color_channels();
+                    let mut black: Option<Vec<f32>> = None;
+                    if l.has_pixels() {
+                        for c in &l.channels {
+                            let slot = match c.id {
+                                -1 => 3,
+                                id if id >= 0 && (id as usize) < cc => id as usize,
+                                _ => continue,
+                            };
+                            let raw = self.channel_bytes(c.offset, c.len, sw, sh, &mut budget)?;
+                            // The fourth CMYK channel is the black plate, not a slot of the result.
+                            let to_black = c.id == 3;
+                            if to_black && black.is_none() {
+                                black = Some(budget.filled(out.len(), 0.0f32)?);
+                            }
+                            // Samples arrive in row-major order of the source.
+                            let (mut sy, mut sx) = (0usize, 0usize);
+                            self.for_each_sample(&raw, sw, sh, |_, v| {
+                                if ys.contains(&sy) && xs.contains(&sx) {
+                                    let d = dest(sy, sx);
+                                    if to_black {
+                                        if let Some(o) = black.as_mut().and_then(|k| k.get_mut(d)) {
+                                            *o = v;
+                                        }
+                                    } else if let Some(p) = out.get_mut(d) {
+                                        p[slot] = v;
+                                    }
+                                }
+                                sx += 1;
+                                if sx == sw {
+                                    sx = 0;
+                                    sy += 1;
+                                }
+                            });
+                            release_bytes(&mut budget, &raw);
+                        }
+                    }
+                    for y in ys {
+                        for x in xs.clone() {
+                            let d = dest(y, x);
+                            let k = black.as_ref().and_then(|k| k.get(d)).copied().unwrap_or(0.0);
+                            if let Some(p) = out.get_mut(d) {
+                                let [r, g, b] = self.rgb_from([p[0], p[1], p[2], k]);
+                                *p = [r, g, b, p[3]];
+                            }
+                        }
+                    }
+                    if let Some(k) = black {
+                        budget.release(k.len() as u64 * 4);
+                    }
                 }
             }
         }
@@ -1098,7 +1326,7 @@ impl Psd {
             let mc = l.channels.iter().find(|c| c.id == -2);
             let (mw, mh) = (m.rect.width() as usize, m.rect.height() as usize);
             let mask = match mc {
-                Some(c) if mw > 0 && mh > 0 => Some(self.decode_channel(c.offset, c.len, mw, mh)?),
+                Some(c) if mw > 0 && mh > 0 => Some(self.channel_floats(c.offset, c.len, mw, mh, &mut budget)?),
                 _ => None,
             };
             let def = m.default_color as f32 / 255.0;
@@ -1261,6 +1489,8 @@ fn lab_to_rgb(l: f32, a: f32, b: f32) -> [f32; 3] {
     [r, g, bb].map(|v| srgb_encode(v.clamp(0.0, 1.0)))
 }
 
+#[cfg(test)]
+mod memory_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
