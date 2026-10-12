@@ -230,6 +230,14 @@ fn page_to_cti(start: f64, span: f64, duration: f64, cti: f64) -> f64 {
     cti.min(duration - span).max(0.0)
 }
 
+/// The visible span's start (seconds) that puts `cti` in its middle, kept inside the comp.
+fn centered_on(span: f64, duration: f64, cti: f64) -> f64 {
+    if !(span.is_finite() && duration.is_finite() && cti.is_finite()) {
+        return 0.0;
+    }
+    (cti - span / 2.0).min(duration - span).max(0.0)
+}
+
 /// The text of an expression being edited when its pick whip was pressed, and the selection in
 /// it (characters): the pick whip's reference goes in there.
 type WhipInto = (String, [usize; 2]);
@@ -1302,6 +1310,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let span = ((graph_x1 - graph_x0 - 6.0) as f64 / pps).max(0.0);
         app.ui.timeline.start = page_to_cti(app.ui.timeline.start, span, comp.duration.seconds(), app.session.time().seconds());
     }
+    let scroll_to = app.ui.timeline.scroll_to.take();
+    if scroll_to == Some(crate::state::ScrollTo::Time) && app.ui.timeline.pps.is_some() {
+        let span = ((graph_x1 - graph_x0 - 6.0) as f64 / pps).max(0.0);
+        app.ui.timeline.start = centered_on(span, comp.duration.seconds(), app.session.time().seconds());
+    }
     let tm = TMap { x0: graph_x0 + 6.0, start: app.ui.timeline.start, pps };
     ctx.data_mut(|d| d.insert_temp(tl_map_id(), (tm.x0, tm.start, tm.pps)));
     let top = rect.min.y;
@@ -1709,6 +1722,14 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let rh = t.row_h;
     let total_h: f32 = rows.iter().map(|r| row_height(r, rh)).sum();
     let max_scroll = (total_h - rows_rect.height() + rh).max(0.0);
+    if scroll_to == Some(crate::state::ScrollTo::Layer) {
+        // The topmost selected layer, in stack order.
+        let sel = &app.session.state.selected_layers;
+        let top = comp.layers.iter().find(|l| sel.contains(&l.id)).map(|l| l.id);
+        if let Some(i) = rows.iter().position(|r| matches!(r.kind, RowKind::Layer) && Some(r.layer) == top) {
+            app.ui.timeline.scroll_y = rows.iter().take(i).map(|r| row_height(r, rh)).sum();
+        }
+    }
     if ui.rect_contains_pointer(rows_rect) {
         let (dy, dx, zoom) = ui.input(|i| (i.smooth_scroll_delta.y, i.smooth_scroll_delta.x, i.modifiers.alt));
         // Ctrl/Cmd+wheel and a trackpad pinch reach egui as a zoom factor rather than a scroll
@@ -3986,6 +4007,17 @@ mod tests {
 
     /// U and the other reveal shortcuts act on the selected layers only: other layers keep their
     /// twirl state and their own reveal (#160).
+    #[test]
+    fn scroll_to_time_centres_the_current_time_inside_the_comp() {
+        assert_eq!(centered_on(4.0, 10.0, 5.0), 3.0);
+        // Near the ends the view stops at the comp's start and end.
+        assert_eq!(centered_on(4.0, 10.0, 1.0), 0.0);
+        assert_eq!(centered_on(4.0, 10.0, 9.5), 6.0);
+        // A span longer than the comp, and bad numbers, start at zero.
+        assert_eq!(centered_on(20.0, 10.0, 5.0), 0.0);
+        assert_eq!(centered_on(f64::NAN, 10.0, 5.0), 0.0);
+    }
+
     #[test]
     fn reveal_shortcuts_leave_unselected_layers_alone() {
         let mut app = app();

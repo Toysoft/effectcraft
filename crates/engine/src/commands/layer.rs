@@ -919,6 +919,14 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
                     let d = t - l.out_point;
                     shift(l, d);
                 }
+                "moveInToStart" => {
+                    let d = Tick::ZERO - l.in_point;
+                    shift(l, d);
+                }
+                "moveOutToEnd" => {
+                    let d = comp_dur - l.out_point;
+                    shift(l, d);
+                }
                 "trimInToTime" => l.in_point = t.min(l.out_point - fd),
                 "trimOutToTime" => l.out_point = t.max(l.in_point + fd),
                 _ => {
@@ -949,6 +957,20 @@ fn timing(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(Value::Null)
+}
+
+/// `p` with `key` set.
+fn with(p: &Value, key: &str, v: Value) -> Value {
+    let mut p = if p.is_object() { p.clone() } else { json!({}) };
+    p[key] = v;
+    p
+}
+
+/// Move the layers `frames` frames in time (Alt+Shift+Page Up / Page Down: ten frames).
+fn move_frames(s: &mut Session, p: &Value, frames: i64) -> Result<Value> {
+    let (cid, _) = layers_p(s, p)?;
+    let delta = s.project.comp(cid).ok_or(EngineError::NoComp)?.frame_rate.tick_of(frames).seconds();
+    timing(s, &with(p, "delta", json!(delta)))
 }
 
 /// Slip edit: move a layer's source (footage or precomp) under its fixed in and out points, like
@@ -1580,6 +1602,16 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("layer.select", "Select Layers", [], None, "{layers: [id|name|#n], add?, toggle?}", has_comp, select),
         cmd!("layer.selectNext", "Select Next Layer", [], Some("Cmd+ArrowDown"), "{add?}", has_comp, select_next),
         cmd!("layer.selectPrevious", "Select Previous Layer", [], Some("Cmd+ArrowUp"), "{add?}", has_comp, select_prev),
+        cmd!("layer.extendSelectionNext", "Extend Selection to Next Layer", [], Some("Cmd+Shift+ArrowDown"), "{}", has_comp, |s, _| select_step(
+            s,
+            &json!({"add": true}),
+            1
+        )),
+        cmd!("layer.extendSelectionPrevious", "Extend Selection to Previous Layer", [], Some("Cmd+Shift+ArrowUp"), "{}", has_comp, |s, _| select_step(
+            s,
+            &json!({"add": true}),
+            -1
+        )),
         cmd!(
             "layer.setSwitch",
             "Layer Switch",
@@ -1607,10 +1639,22 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layer Timing",
             [],
             None,
-            "{layers?, op?: moveInToTime|moveOutToTime|trimInToTime|trimOutToTime, delta?, start?, in?, out?, inDelta?, outDelta? (seconds, per layer), merge?}",
+            "{layers?, op?: moveInToTime|moveOutToTime|moveInToStart|moveOutToEnd|trimInToTime|trimOutToTime, delta?, start?, in?, out?, inDelta?, outDelta? (seconds, per layer), merge?}",
             has_layers,
             timing
         ),
+        cmd!("layer.moveInToStart", "Move Layer In Point to Beginning of Comp", [], Some("Alt+Home"), "{layers?}", has_layers, |s, p| timing(
+            s,
+            &with(p, "op", json!("moveInToStart"))
+        )),
+        cmd!("layer.moveOutToEnd", "Move Layer Out Point to End of Comp", [], Some("Alt+End"), "{layers?}", has_layers, |s, p| timing(
+            s,
+            &with(p, "op", json!("moveOutToEnd"))
+        )),
+        cmd!("layer.moveEarlier", "Move Layers 1 Frame Earlier", [], None, "{layers?}", has_layers, |s, p| move_frames(s, p, -1)),
+        cmd!("layer.moveLater", "Move Layers 1 Frame Later", [], None, "{layers?}", has_layers, |s, p| move_frames(s, p, 1)),
+        cmd!("layer.moveEarlier10", "Move Layers 10 Frames Earlier", [], Some("Alt+Shift+PageUp"), "{layers?}", has_layers, |s, p| move_frames(s, p, -10)),
+        cmd!("layer.moveLater10", "Move Layers 10 Frames Later", [], Some("Alt+Shift+PageDown"), "{layers?}", has_layers, |s, p| move_frames(s, p, 10)),
         cmd!("layer.slip", "Slip Edit", [], None, "{layers?, delta? (seconds) | frames?, merge?}", has_layers, slip),
         cmd!("layer.slipBack", "Slip Edit 1 Frame Earlier", [], Some("Alt+PageUp"), "{layers?}", has_layers, |s, p| {
             let mut p = p.clone();

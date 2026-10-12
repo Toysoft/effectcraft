@@ -39,6 +39,7 @@ pub mod markers;
 mod mask;
 pub mod mask_interp;
 pub(crate) mod model3d;
+mod nav_more;
 pub mod paint;
 pub mod panels_cmds;
 pub(crate) mod path_nulls;
@@ -175,6 +176,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(paths::specs());
         v.extend(effect::specs());
         v.extend(time::specs());
+        v.extend(nav_more::specs());
         v.extend(render_queue::specs());
         v.extend(help::specs());
         v.extend(query::specs());

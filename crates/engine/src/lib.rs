@@ -200,6 +200,9 @@ pub struct EditorState {
     pub active_comp: Option<ItemId>,
     /// Open compositions (viewer/timeline tabs), in tab order.
     pub open_comps: Vec<ItemId>,
+    /// Compositions that were active before the current one, most recent first (Shift+Esc).
+    #[serde(default)]
+    pub recent_comps: Vec<ItemId>,
     /// Current time per comp (the CTI).
     pub times: std::collections::BTreeMap<ItemId, Tick>,
     pub selected_layers: Vec<LayerId>,
@@ -879,6 +882,12 @@ impl Session {
             self.state.open_comps.push(id);
         }
         if self.state.active_comp != Some(id) {
+            let previous = self.state.active_comp;
+            self.state.recent_comps.retain(|c| *c != id && Some(*c) != previous);
+            if let Some(previous) = previous {
+                self.state.recent_comps.insert(0, previous);
+                self.state.recent_comps.truncate(32);
+            }
             self.state.active_comp = Some(id);
             self.state.selected_layers.clear();
             self.state.selected_props.clear();
@@ -1163,6 +1172,8 @@ mod tests_rig3d;
 mod tests_sequence;
 #[cfg(test)]
 mod tests_settings;
+#[cfg(test)]
+mod tests_shortcut_cmds;
 #[cfg(test)]
 mod tests_stubs;
 #[cfg(test)]

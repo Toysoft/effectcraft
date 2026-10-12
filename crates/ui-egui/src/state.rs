@@ -317,6 +317,15 @@ impl TimelineState {
     }
 }
 
+/// Where a Timeline shortcut scrolls to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScrollTo {
+    /// D: the current time, centred in the time graph.
+    Time,
+    /// X: the topmost selected layer, at the top of the layers.
+    Layer,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimelineState {
     /// Visible span start (seconds) and pixels per second; None = fit comp.
@@ -385,6 +394,9 @@ pub struct TimelineState {
     /// The name column shows Source Name instead of Layer Name (click its header).
     #[serde(default)]
     pub source_name: bool,
+    /// A scroll asked for by a shortcut (D, X), done when the Timeline is next drawn.
+    #[serde(skip)]
+    pub scroll_to: Option<ScrollTo>,
 }
 
 pub fn default_tl_columns() -> BTreeSet<String> {
@@ -426,6 +438,7 @@ impl Default for TimelineState {
             unlinked: BTreeSet::new(),
             columns: default_tl_columns(),
             source_name: false,
+            scroll_to: None,
         }
     }
 }
