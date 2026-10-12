@@ -268,7 +268,7 @@ pub fn sprite_plan(id: &str, ctx: &EffectCtx, b: &Buf) -> Option<SpritePlan> {
             crate::sim2::WavePlan::Height { .. } => None,
         }),
         "ec.sim.foam" => crate::sim2::foam_plan(ctx, b),
-        "ec.sim.ccparticleworld" => particle_world_plan(ctx, b),
+        "ec.sim.ccparticleworld" => Some(particle_world_plan(ctx, b)),
         "ec.sim.ccparticlesystems2" => Some(particle_systems2_plan(ctx, b)),
         _ => None,
     }
@@ -1069,10 +1069,7 @@ fn pw_phys(ctx: &EffectCtx) -> Phys {
 }
 
 fn particle_world(ctx: &EffectCtx, b: Buf) -> Buf {
-    match particle_world_plan(ctx, &b) {
-        Some(plan) => plan.finish(b),
-        None => b,
-    }
+    particle_world_plan(ctx, &b).finish(b)
 }
 
 /// CC Particle World's Extras ▸ Effect Camera parameters (id prefix).
@@ -1159,13 +1156,14 @@ impl PwCamera {
     }
 }
 
-/// CC Particle World's sprites (far to near), `None` before anything is born.
-fn particle_world_plan(ctx: &EffectCtx, b: &Buf) -> Option<SpritePlan> {
+/// CC Particle World's sprites (far to near), none before anything is born. The particles
+/// replace the layer, as in After Effects: its own pixels never show (#839).
+fn particle_world_plan(ctx: &EffectCtx, b: &Buf) -> SpritePlan {
     let pr = ctx.params;
     let (lw, lh) = (ctx.layer_size[0] as f32, ctx.layer_size[1] as f32);
     let phys = pw_phys(ctx);
     if phys.rate <= 0.0 && ctx.time <= 0.0 {
-        return None;
+        return SpritePlan { sprites: vec![], tints: vec![], acc: Acc::Over, post: Post::Replace };
     }
     let key = sim_key(ctx, 1);
     let st = accelerated(ctx, key, &phys).unwrap_or_else(|| simulate(&PW_CACHE, key, ctx.time, &phys));
@@ -1190,7 +1188,8 @@ fn particle_world_plan(ctx: &EffectCtx, b: &Buf) -> Option<SpritePlan> {
         .collect();
     list.sort_by(|a, b| b.0.total_cmp(&a.0));
     let sprites: Vec<Sprite> = list.into_iter().map(|(_, s)| s).collect();
-    Some(particle_sprites(sprites, pr.e("particle/transferMode")))
+    // Transfer Mode only says how the particles meet each other (Add accumulates them).
+    SpritePlan { post: Post::Replace, ..particle_sprites(sprites, pr.e("particle/transferMode")) }
 }
 
 /// The CC particle systems' sprites with their Transfer Mode (Composite, Screen, Add, Black
@@ -1737,6 +1736,22 @@ mod tests {
         // Before birth nothing is drawn.
         let t0 = run("ec.sim.ccparticleworld", &v, Image::new(40, 40), 0.0);
         assert!(t0.data.iter().all(|p| p[3] == 0.0));
+    }
+
+    /// #839: the particles replace an opaque layer (a black solid) in every Transfer Mode, so
+    /// the layers below show between them; before birth the layer is fully transparent.
+    #[test]
+    fn particle_world_replaces_the_layer() {
+        let solid = || Image::filled(40, 40, [0.0, 0.0, 0.0, 1.0]);
+        for mode in 0..4 {
+            let mut v = pw_vals(11.0);
+            v.push(("particle/transferMode", Value::Enum(mode)));
+            let out = run("ec.sim.ccparticleworld", &v, solid(), 2.0);
+            assert!(out.data.iter().any(|p| p[3] > 0.0), "mode {mode}: particles alive");
+            assert!(out.data.iter().any(|p| p[3] == 0.0), "mode {mode}: transparent between particles");
+        }
+        let unborn = [("birthRate", num(0.0))];
+        assert!(run("ec.sim.ccparticleworld", &unborn, solid(), 0.0).data.iter().all(|p| p[3] == 0.0));
     }
 
     #[test]
