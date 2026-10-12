@@ -31,7 +31,11 @@ const VERSION: &str = "v1";
 const MAGIC: &[u8; 4] = b"ECDC";
 /// Pending writes before new ones are dropped.
 #[cfg(not(target_arch = "wasm32"))]
-const QUEUE_LIMIT: usize = 64;
+const QUEUE_LIMIT: usize = 8;
+/// Cache writes are best-effort. Keep the background queue bounded by memory as well as count:
+/// a single high-resolution frame can be much larger than dozens of small thumbnails.
+#[cfg(not(target_arch = "wasm32"))]
+const QUEUE_BYTES_LIMIT: usize = 128 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -213,6 +217,12 @@ enum Job {
 struct Queue {
     jobs: std::collections::VecDeque<Job>,
     busy: bool,
+    queued_bytes: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn queue_accepts(q: &Queue, payload_bytes: usize) -> bool {
+    q.jobs.len() < QUEUE_LIMIT && q.queued_bytes.checked_add(payload_bytes).is_some_and(|n| n <= QUEUE_BYTES_LIMIT)
 }
 
 pub struct DiskCache {
@@ -298,7 +308,7 @@ impl DiskCache {
             evictions: AtomicU64::new(0),
             dropped: AtomicU64::new(0),
             tmp_counter: AtomicU64::new(0),
-            queue: Arc::new((Mutex::new(Queue { jobs: Default::default(), busy: false }), Condvar::new())),
+            queue: Arc::new((Mutex::new(Queue { jobs: Default::default(), busy: false, queued_bytes: 0 }), Condvar::new())),
             min_layer_ms: AtomicU64::new(30),
         });
         dc.rescan();
@@ -472,10 +482,11 @@ impl DiskCache {
         {
             let (m, cv) = &*self.queue;
             let Ok(mut q) = m.lock() else { return };
-            if q.jobs.len() >= QUEUE_LIMIT {
+            if !queue_accepts(&q, payload.len()) {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
                 return;
             }
+            q.queued_bytes += payload.len();
             q.jobs.push_back(Job::Write(kind, key, payload));
             cv.notify_all();
         }
@@ -582,12 +593,16 @@ fn writer(dc: std::sync::Weak<DiskCache>, q: Arc<(Mutex<Queue>, Condvar)>) {
             }
         };
         let Some(cache) = dc.upgrade() else { return };
+        let bytes = match &job {
+            Job::Write(_, _, payload) => payload.len(),
+        };
         match job {
             Job::Write(kind, key, payload) => cache.write_now(kind, key, &payload),
         }
         drop(cache);
         if let Ok(mut g) = m.lock() {
             g.busy = false;
+            g.queued_bytes = g.queued_bytes.saturating_sub(bytes);
         }
         cv.notify_all();
     }
@@ -873,6 +888,18 @@ mod tests {
         assert_eq!(ix.keys(Kind::Frame), vec![1]);
         ix.clear();
         assert!(ix.is_empty() && ix.total() == 0);
+    }
+
+    #[test]
+    fn queued_writes_obey_count_and_memory_limits() {
+        let mut q = Queue { jobs: Default::default(), busy: false, queued_bytes: QUEUE_BYTES_LIMIT - 16 };
+        assert!(queue_accepts(&q, 16), "the exact byte budget fits");
+        assert!(!queue_accepts(&q, 17), "a payload over the byte budget is dropped");
+        q.queued_bytes = usize::MAX;
+        assert!(!queue_accepts(&q, 1), "byte-count overflow is rejected");
+        q.queued_bytes = 0;
+        q.jobs.extend((0..QUEUE_LIMIT).map(|_| Job::Write(Kind::Frame, 0, vec![])));
+        assert!(!queue_accepts(&q, 0), "the job-count limit is also enforced");
     }
 
     #[test]

@@ -360,7 +360,13 @@ struct SavedWorkspaces {
 }
 
 impl EffectcraftApp {
-    pub fn new(session: Session) -> Self {
+    pub fn new(mut session: Session) -> Self {
+        // Start reading RAM before the first preview is requested. The result is applied from
+        // the UI's non-blocking memory watch as soon as it arrives.
+        session.memory_watch.poll();
+        session.sys_memory = session.memory_watch.latest().or(session.sys_memory);
+        let frames = Frames::default();
+        frames.set_memory(session.sys_memory);
         let mut ui = UiState::default();
         let workspace_store = workspace_state::WorkspaceStore::load(session.config.as_deref(), &mut ui);
         EffectcraftApp {
@@ -369,7 +375,7 @@ impl EffectcraftApp {
             workspace_store,
             tokens: Tokens::for_kind(Default::default()),
             auto: Default::default(),
-            frames: Frames::default(),
+            frames,
             playback: Playback::default(),
             dialog: None,
             hooks: Hooks::default(),
@@ -841,10 +847,12 @@ impl EffectcraftApp {
         // Auto follows the zoom alike while playing and paused, so frames cached while scrubbing
         // play back, and frames cached by a preview stay on screen when it stops.
         let full = self.ui.viewer.res.scale(zoom, ppp);
-        // Fast Previews ▸ Adaptive Resolution / Fast Draft: lower resolution while dragging.
-        let (_, k) = self.session.state.viewer.fast_previews.render(self.ui.viewer.interacting || self.ui.viewer.property_interacting);
+        // Adaptive Resolution also lowers Auto playback resolution; it restores full detail when
+        // playback or a drag stops. A fixed preview resolution always wins above.
+        let interacting = self.ui.viewer.interacting || self.ui.viewer.property_interacting || self.playback.playing;
+        let (_, k) = self.session.state.viewer.fast_previews.render(interacting);
         if k < 1.0 && self.ui.viewer.res == state::Resolution::Auto {
-            return full.min((full * 0.5).max(self.session.prefs.adaptive_limit()));
+            return full.min((full * k).max(self.session.prefs.adaptive_limit()));
         }
         full
     }
@@ -916,7 +924,8 @@ impl EffectcraftApp {
 
     /// Render options of viewer frames of `comp` at `scale`.
     pub fn frame_opts(&self, comp: ItemId, scale: f64) -> RenderOpts {
-        let (draft, _) = self.session.state.viewer.fast_previews.render(self.ui.viewer.interacting || self.ui.viewer.property_interacting);
+        let interacting = self.ui.viewer.interacting || self.ui.viewer.property_interacting || self.playback.playing;
+        let (draft, _) = self.session.state.viewer.fast_previews.render(interacting);
         let roi = self.viewer_region(comp);
         RenderOpts {
             scale,
@@ -1405,7 +1414,7 @@ impl EffectcraftApp {
             // on the UI thread (`Frames::pump`)
             return self.frames.remote_slots().max(1);
         }
-        self.frames.parallelism()
+        self.frames.parallelism().min(self.frames.max_active_jobs())
     }
 
     // ---------------------------------------------------------------- control channel

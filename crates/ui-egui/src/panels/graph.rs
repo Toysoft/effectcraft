@@ -104,7 +104,12 @@ fn shown_dims(l: &Layer, pr: &Property) -> usize {
 /// Build the curves for the visible time span.
 fn curves<'a>(app: &EffectcraftApp, comp: &'a Comp, ectx: &EvalCtx, tm: TMap, plot: Rect, speed: bool) -> Vec<Curve<'a>> {
     let sel = &app.session.state.selected_keys;
-    let n = ((plot.width() / 2.0) as usize).max(2);
+    // A graph curve does not need a point every two UI pixels. Sampling less often keeps the
+    // expression/property evaluator from doing thousands of redundant evaluations per repaint.
+    let spacing = if app.playback.playing { 8.0 } else { 4.0 };
+    let n = ((plot.width() / spacing).ceil() as usize).clamp(2, 2048);
+    let pad = 20.0 / tm.pps.abs().max(1e-6);
+    let (visible_start, visible_end) = (tm.t(plot.left()) - pad, tm.t(plot.right()) + pad);
     let mut out = vec![];
     for (pi, (lid, uid)) in shown_props(app, comp).into_iter().enumerate() {
         let Some(l) = comp.layer(lid) else { continue };
@@ -132,8 +137,11 @@ fn curves<'a>(app: &EffectcraftApp, comp: &'a Comp, ectx: &EvalCtx, tm: TMap, pl
             }
             let mut keys = vec![];
             for (i, k) in pr.keys.iter().enumerate() {
-                let ks = sel.contains(&KeyRef { layer: lid, prop: uid, time: k.time });
                 let kt = l.comp_time(k.time).seconds();
+                if kt < visible_start || kt > visible_end {
+                    continue;
+                }
+                let ks = sel.contains(&KeyRef { layer: lid, prop: uid, time: k.time });
                 let ed = if spatial { 0 } else { d };
                 let mut handles = vec![];
                 let mut side_speeds = vec![];

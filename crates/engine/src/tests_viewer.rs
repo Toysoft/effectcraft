@@ -222,6 +222,15 @@ fn channel_exposure_and_fast_preview_commands() {
 }
 
 #[test]
+fn adaptive_preview_is_the_default_and_restores_full_quality() {
+    let opts = crate::commands::viewer_cmds::ViewOptions::default();
+    let mode = opts.fast_previews;
+    assert_eq!(mode, crate::commands::viewer_cmds::FastPreviews::AdaptiveResolution);
+    assert_eq!(mode.render(true), (false, 0.25));
+    assert_eq!(mode.render(false), (false, 1.0));
+}
+
+#[test]
 fn snapshot_store_and_restore() {
     let mut s = comp();
     assert!(!s.is_enabled("view.showSnapshot"));

@@ -72,6 +72,14 @@ fn prefs_migrate_old_layout_and_keep_unknown_keys() {
 }
 
 #[test]
+fn prefs_migrate_the_old_100_gb_disk_cache_default_only() {
+    let old_default = Prefs::from_json(&json!({"version": 2, "disk": {"diskCacheMaxGb": 100}}).to_string());
+    assert_eq!(old_default.disk.disk_cache_max_gb, 5);
+    let custom = Prefs::from_json(&json!({"version": 2, "disk": {"diskCacheMaxGb": 20}}).to_string());
+    assert_eq!(custom.disk.disk_cache_max_gb, 20);
+}
+
+#[test]
 fn prefs_set_validates_keys_types_and_ranges() {
     let mut p = Prefs::default();
     assert!(p.set("general.nope", json!(1)).is_err());

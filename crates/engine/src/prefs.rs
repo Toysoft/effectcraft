@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 /// Current settings layout version.
-pub const PREFS_VERSION: u32 = 2;
+pub const PREFS_VERSION: u32 = 3;
 /// Settings file name in the config store.
 pub const PREFS_FILE: &str = "prefs.json";
 
@@ -242,7 +242,7 @@ page!(Audio {
 
 page!(Disk {
     disk_cache_enabled: bool = true,
-    disk_cache_max_gb: u32 = 100,
+    disk_cache_max_gb: u32 = 5,
     disk_cache_folder: String = String::new(),
     media_cache_folder: String = String::new(),
     conformed_media_folder: String = String::new(),
@@ -460,6 +460,14 @@ pub fn migrate(mut v: Value) -> Value {
             }
             obj.insert("labels".into(), serde_json::to_value(labels).unwrap_or_default());
         }
+    }
+    // Version 2 shipped a 100 GB disk-cache default, which could consume an entire laptop drive.
+    // Lower only that old default; keep values users explicitly changed to another size.
+    if version < 3
+        && let Some(disk) = obj.get_mut("disk").and_then(Value::as_object_mut)
+        && disk.get("diskCacheMaxGb").and_then(Value::as_u64) == Some(100)
+    {
+        disk.insert("diskCacheMaxGb".into(), json!(5));
     }
     // Settings saved before appearance modes had one theme: keep showing it, as a fixed Dark or
     // Light mode, instead of switching established users to Auto.

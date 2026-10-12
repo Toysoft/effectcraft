@@ -118,19 +118,26 @@ pub fn dropped_files(app: &mut EffectcraftApp, ui: &egui::Ui, bounds: Rect) {
     }
 }
 
-/// Re-read the system's free memory every 30 s (cache budgets follow it; on Windows each
-/// reading starts PowerShell in the background, so it isn't done more often).
+/// Re-read the system's free memory every 5 s. The first read starts immediately, before the
+/// viewer can fill its caches; while the result is pending, repaint briefly so it is applied as
+/// soon as the background query completes.
 fn memory_watch(app: &mut EffectcraftApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
     let id = egui::Id::new("prefs-memory-watch");
     let last = ctx.data(|d| d.get_temp::<f64>(id));
-    if last.is_some_and(|t| now - t < 30.0) {
+    let interval = if app.session.sys_memory.is_none() { 0.25 } else { 5.0 };
+    if last.is_some_and(|t| now - t < interval) {
+        if app.session.sys_memory.is_none() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         return;
     }
     ctx.data_mut(|d| d.insert_temp(id, now));
-    // The first frame only records the time: tests and short runs don't query the system.
-    if last.is_some() {
-        app.session.memory_tick();
+    let budgets = app.session.memory_tick();
+    app.frames.set_memory(app.session.sys_memory);
+    app.frames.set_budget(budgets.preview);
+    if app.session.sys_memory.is_none() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 }
 

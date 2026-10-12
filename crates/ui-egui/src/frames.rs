@@ -24,7 +24,7 @@
 //! them (Info panel, eyedroppers, histograms).
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use effectcraft_engine::project::{Comp, ItemId, ItemKind, LayerSource, Node, Project, PropGroup};
@@ -40,8 +40,26 @@ const MAX_KEEPERS: usize = 64;
 /// GPU frames kept for RAM preview (bytes of video memory) at first. wgpu can't tell how much
 /// video memory there is: each time the device runs out, the budget halves (to
 /// [`MIN_GPU_BUDGET`]) and the frame renders on the CPU (#106).
-const GPU_BUDGET: usize = 1 << 30;
+const GPU_BUDGET: usize = 512 << 20;
 const MIN_GPU_BUDGET: usize = 64 << 20;
+const DEFAULT_ACTIVE_JOBS: usize = 2;
+
+/// Keep the number of simultaneously rendered preview frames below a memory-dependent limit.
+/// One render can use the whole Rayon pool for pixels and layers; running many of those at once
+/// multiplies the compositor's temporary buffers and can exhaust unified memory on laptops.
+fn memory_limits(mem: Option<effectcraft_engine::sysinfo::SysMemory>) -> (usize, usize) {
+    let Some(mem) = mem.filter(|m| m.total > 0) else {
+        return (DEFAULT_ACTIVE_JOBS, GPU_BUDGET);
+    };
+    let gib = 1u64 << 30;
+    if mem.is_low() || mem.total <= 8 * gib {
+        (1, 256 << 20)
+    } else if mem.total <= 16 * gib {
+        (2, GPU_BUDGET)
+    } else {
+        (4, GPU_BUDGET)
+    }
+}
 
 /// A rendered viewer frame: CPU pixels or a GPU texture.
 #[derive(Clone)]
@@ -365,6 +383,9 @@ pub struct Frames {
     #[cfg(not(target_arch = "wasm32"))]
     /// None if the OS refused the threads: jobs then go to rayon's global pool.
     pool: Option<rayon::ThreadPool>,
+    /// Frame-level concurrency; inner pixel work can still use the complete Rayon pool.
+    active_jobs: Arc<AtomicUsize>,
+    max_active_jobs: Arc<AtomicUsize>,
     ctx: Option<egui::Context>,
     /// Render time of the last viewer (urgent) frame in ms, for the Info panel / perf readout.
     pub last_ms: Arc<Mutex<f64>>,
@@ -400,6 +421,8 @@ impl Default for Frames {
                 .panic_handler(|_| log::error!("a frame render panicked; that frame was skipped"))
                 .build()
                 .ok(),
+            active_jobs: Arc::new(AtomicUsize::new(0)),
+            max_active_jobs: Arc::new(AtomicUsize::new(DEFAULT_ACTIVE_JOBS)),
             ctx: None,
             last_ms: Arc::new(Mutex::new(0.0)),
             content_keys: Arc::default(),
@@ -690,6 +713,22 @@ impl Frames {
         }
     }
 
+    /// Apply the host's memory reading to frame-level concurrency and GPU frame retention.
+    /// A missing reading uses a conservative laptop-friendly default until the first poll returns.
+    pub fn set_memory(&self, memory: Option<effectcraft_engine::sysinfo::SysMemory>) {
+        let (jobs, gpu_budget) = memory_limits(memory);
+        self.max_active_jobs.store(jobs, Ordering::Release);
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.gpu_budget = gpu_budget;
+            cache.evict_gpu();
+        }
+    }
+
+    /// Maximum native preview renders that can hold frame-sized temporary buffers at once.
+    pub fn max_active_jobs(&self) -> usize {
+        self.max_active_jobs.load(Ordering::Acquire).max(1)
+    }
+
     pub fn budget(&self) -> usize {
         self.cache.lock().map(|c| c.budget).unwrap_or(0)
     }
@@ -791,6 +830,8 @@ impl Frames {
             last: self.last_ms.clone(),
             content_keys: self.content_keys.clone(),
             gpu_retired: self.gpu_retired.clone(),
+            active_jobs: self.active_jobs.clone(),
+            max_active_jobs: self.max_active_jobs.clone(),
         }
     }
 
@@ -920,6 +961,16 @@ struct Worker {
     last: Arc<Mutex<f64>>,
     content_keys: ContentKeys,
     gpu_retired: Arc<AtomicBool>,
+    active_jobs: Arc<AtomicUsize>,
+    max_active_jobs: Arc<AtomicUsize>,
+}
+
+struct ActiveFrame(Arc<AtomicUsize>);
+
+impl Drop for ActiveFrame {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -960,6 +1011,7 @@ impl Worker {
 
     /// Render the queued job that matters most right now. `false` when the queue was empty.
     fn run_next(&self) -> bool {
+        let Some(_active) = self.reserve_frame() else { return false };
         let Worker { queue, content_keys, .. } = self;
         let job = {
             let Ok(mut q) = queue.lock() else { return false };
@@ -997,6 +1049,21 @@ impl Worker {
             }
         }
         true
+    }
+
+    /// Reserve one frame-render slot without blocking Rayon workers that may be needed by the
+    /// active render's inner parallel loops.
+    fn reserve_frame(&self) -> Option<ActiveFrame> {
+        let mut active = self.active_jobs.load(Ordering::Acquire);
+        loop {
+            if active >= self.max_active_jobs.load(Ordering::Acquire).max(1) {
+                return None;
+            }
+            match self.active_jobs.compare_exchange_weak(active, active + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(ActiveFrame(self.active_jobs.clone())),
+                Err(now) => active = now,
+            }
+        }
     }
 
     /// Store a finished frame and release its job.
@@ -1169,6 +1236,15 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_render_limits_follow_available_memory() {
+        let gib = 1u64 << 30;
+        assert_eq!(memory_limits(None), (DEFAULT_ACTIVE_JOBS, GPU_BUDGET));
+        assert_eq!(memory_limits(Some(effectcraft_engine::sysinfo::SysMemory { total: 8 * gib, available: 6 * gib })), (1, 256 << 20));
+        assert_eq!(memory_limits(Some(effectcraft_engine::sysinfo::SysMemory { total: 16 * gib, available: 8 * gib })), (2, GPU_BUDGET));
+        assert_eq!(memory_limits(Some(effectcraft_engine::sysinfo::SysMemory { total: 32 * gib, available: 24 * gib })), (4, GPU_BUDGET));
+    }
 
     /// Frames larger than the texture limit are averaged down by a whole factor (#201: an
     /// 11000×2200 comp at Full resolution against an 8192 limit).

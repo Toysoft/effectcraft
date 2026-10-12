@@ -93,6 +93,10 @@ fn prefetch_waits_while_edits_keep_coming() {
     // Short steps: input time advances 50 ms per frame.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.05).build_eframe(|_| EffectcraftApp::new(s));
     settle(&mut h);
+    // This test covers background prefetch when there is a spare frame slot. Keep the scenario
+    // independent of the host running CI; low-memory machines intentionally reserve their only
+    // slot for the urgent viewer frame.
+    h.state().frames.set_memory(Some(effectcraft_engine::sysinfo::SysMemory { total: 32 << 30, available: 24 << 30 }));
     let frame = |h: &Harness<'_, EffectcraftApp>| {
         let app = h.state();
         let comp = app.session.project.comp(ItemId(c)).unwrap();

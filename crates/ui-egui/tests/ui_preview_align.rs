@@ -208,11 +208,14 @@ fn cache_before_playback_plays_what_fits_in_ram() {
 }
 
 #[test]
-fn auto_resolution_is_the_same_playing_and_paused() {
+fn auto_resolution_drops_during_playback_and_restores_when_paused() {
     let mut h = harness();
-    let paused = h.state().viewer_scale(0.5, 2.0);
+    let full = h.state().viewer_scale(0.5, 2.0);
+    assert_eq!(full, 1.0);
     h.state_mut().playback.playing = true;
-    assert_eq!(h.state().viewer_scale(0.5, 2.0), paused);
+    assert_eq!(h.state().viewer_scale(0.5, 2.0), 0.25);
+    h.state_mut().playback.playing = false;
+    assert_eq!(h.state().viewer_scale(0.5, 2.0), full);
 }
 
 #[test]
