@@ -310,3 +310,30 @@ fn psd_with_thousands_of_nested_groups_imports_on_a_small_stack() {
     assert_eq!(comps, 65);
     assert!(warned);
 }
+
+#[test]
+fn psd_with_damaged_layer_section_imports_the_flattened_image() {
+    let mut d = WDoc::new(30, 20);
+    d.layers = vec![
+        WLayer::solid("Back", Rect::new(0, 0, 30, 20), [0.0, 0.0, 1.0, 1.0]),
+        WLayer::solid("Box", Rect::new(2, 2, 8, 8), [1.0, 0.0, 0.0, 1.0]).with_blend(b"mul "),
+    ];
+    let mut bytes = write(&d);
+    let at = bytes.windows(8).position(|w| w == b"8BIMmul ").unwrap();
+    bytes[at] = b'X';
+    let path = tmp("damaged.psd");
+    std::fs::write(&path, bytes).unwrap();
+    let mut s = Session::default();
+    let r = s.execute_checked("file.import", json!({"paths": [path], "importAs": "composition"})).unwrap();
+    // Photoshop import warnings are reported with the import's `errors` (as for adjustment layers).
+    let warnings = r["errors"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{r}");
+    assert!(warnings[0].as_str().unwrap().contains("Layers could not be read"), "{r}");
+    let cid = effectcraft_project::ItemId(r["comps"][0].as_u64().unwrap());
+    let c = s.project.comp(cid).unwrap().clone();
+    assert_eq!((c.width, c.height), (30, 20));
+    assert_eq!(c.layers.len(), 1);
+    let LayerSource::Footage { item } = c.layers[0].source else { panic!("footage") };
+    let ItemKind::Footage(f) = &s.project.item(item).unwrap().kind else { panic!() };
+    assert!(f.layer.is_none(), "the merged image, not a Photoshop layer");
+}

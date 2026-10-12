@@ -111,12 +111,44 @@ struct Ctx<'a> {
 pub fn import(proj: &mut Project, psd: &Psd, path: &str, name: &str, retain: bool, rate: FrameRate, duration: Tick) -> PsdImport {
     let folder = proj.add_item(&format!("{name} Layers"), Label::Yellow, None, ItemKind::Folder);
     let mut cx = Ctx { psd, path, retain, folder, rate, duration, items: vec![], warnings: vec![] };
+    cx.warnings.extend(psd.warnings.iter().cloned());
     let (tree, flattened) = psd.tree_report();
     if flattened > 0 {
         cx.warnings.push(format!("{flattened} group(s) nested deeper than {} levels were flattened into their parent", effectcraft_psd::MAX_GROUP_DEPTH));
     }
-    let comp = build_comp(proj, &mut cx, name, &tree, None);
+    let comp =
+        if psd.layers.is_empty() && !psd.warnings.is_empty() { flattened_comp(proj, &mut cx, name) } else { build_comp(proj, &mut cx, name, &tree, None) };
     PsdImport { comp, folder, items: cx.items, warnings: cx.warnings }
+}
+
+/// The layers could not be read: the merged image as the composition's only layer.
+fn flattened_comp(proj: &mut Project, cx: &mut Ctx, name: &str) -> ItemId {
+    let cid = proj.add_item(name, Label::Sandstone, None, ItemKind::Comp(Arc::new(new_comp(cx))));
+    cx.items.push(cid);
+    let mut comp = new_comp(cx);
+    let file = std::path::Path::new(cx.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let f = Footage {
+        path: cx.path.to_string(),
+        kind: FootageKind::Still,
+        width: cx.psd.width,
+        height: cx.psd.height,
+        pixel_aspect: 1.0,
+        frame_rate: cx.rate,
+        has_video: true,
+        alpha: if cx.psd.merged_alpha { AlphaMode::Straight } else { AlphaMode::Ignore },
+        loop_count: 1,
+        codec: "PSD".into(),
+        layer: None,
+        ..Default::default()
+    };
+    let id = proj.add_item(&file, Label::Lavender, Some(cx.folder), ItemKind::Footage(f));
+    cx.items.push(id);
+    let l = build::layer(proj, &comp, name, LayerSource::Footage { item: id }, (cx.psd.width, cx.psd.height), None);
+    comp.layers.push(l);
+    if let Some(item) = proj.item_mut(cid) {
+        item.kind = ItemKind::Comp(Arc::new(comp));
+    }
+    cid
 }
 
 fn new_comp(cx: &Ctx) -> Comp {

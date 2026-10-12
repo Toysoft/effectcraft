@@ -351,3 +351,58 @@ fn rect_new_near_i32_max_saturates() {
     assert_eq!((r.right, r.bottom), (i32::MAX, i32::MAX));
     assert!(r.is_empty());
 }
+
+fn find(bytes: &[u8], needle: &[u8]) -> usize {
+    bytes.windows(needle.len()).position(|w| w == needle).expect("needle present")
+}
+
+/// The second layer record's signature overwritten.
+fn bad_signature() -> Vec<u8> {
+    let mut bytes = write(&doc_with_layers(8, ColorMode::Rgb, true));
+    let at = find(&bytes, b"8BIMmul ");
+    bytes[at] = b'X';
+    bytes
+}
+
+/// The first channel of the first layer claims more data than the file holds.
+fn bad_channel_length() -> Vec<u8> {
+    let mut bytes = write(&doc_with_layers(8, ColorMode::Rgb, true));
+    let at = find(&bytes, b"8BIMnorm");
+    let first_len = at - 4 * 6 + 2;
+    bytes[first_len..first_len + 4].copy_from_slice(&0x7fff_fff0u32.to_be_bytes());
+    bytes
+}
+
+#[test]
+fn damaged_layer_section_keeps_the_merged_image() {
+    let good = Psd::parse(write(&doc_with_layers(8, ColorMode::Rgb, true))).unwrap();
+    assert!(good.warnings.is_empty() && good.layers.len() == 3);
+    let want = good.composite().unwrap();
+    for bytes in [bad_signature(), bad_channel_length()] {
+        let p = Psd::parse(bytes).unwrap();
+        assert!(p.layers.is_empty());
+        assert_eq!(p.warnings.len(), 1, "{:?}", p.warnings);
+        assert!(p.warnings[0].contains("Layers could not be read"));
+        assert_eq!((p.width, p.height), (40, 30));
+        let got = p.composite().unwrap();
+        assert_eq!(got.data, want.data);
+    }
+}
+
+#[test]
+fn header_damage_and_missing_merged_image_still_fail() {
+    let good = write(&doc_with_layers(8, ColorMode::Rgb, true));
+    // Zero width.
+    let mut b = good.clone();
+    b[18..22].copy_from_slice(&0u32.to_be_bytes());
+    assert!(Psd::parse(b).is_err());
+    // Unknown colour mode.
+    let mut b = good.clone();
+    b[24..26].copy_from_slice(&99u16.to_be_bytes());
+    assert!(Psd::parse(b).is_err());
+    // Damaged layers and no merged image at all: nothing to fall back to.
+    let end = Psd::parse(good).unwrap().merged_offset;
+    let mut b = bad_signature();
+    b.truncate(end);
+    assert!(Psd::parse(b).is_err());
+}

@@ -343,6 +343,9 @@ pub struct Psd {
     pub palette: Vec<u8>,
     /// Files embedded for smart objects.
     pub linked: Vec<LinkedFile>,
+    /// Repairs made while reading: damage that was skipped instead of failing the document
+    /// (for example an unreadable layer section, in which case only the merged image is kept).
+    pub warnings: Vec<String>,
     data: Arc<[u8]>,
     merged_offset: usize,
 }
@@ -391,6 +394,7 @@ impl Psd {
             merged_alpha: false,
             palette,
             linked: vec![],
+            warnings: vec![],
             data: data.clone(),
             merged_offset: 0,
         };
@@ -399,8 +403,17 @@ impl Psd {
         if lm_len > 0 {
             let li_len = r.length(psb)?;
             let li_end = r.pos.checked_add(li_len).filter(|&e| e <= lm_end).ok_or(Error::Truncated)?;
-            if li_len > 0 {
-                psd.layer_info(&data, r.pos, li_end)?;
+            if li_len > 0
+                && let Err(e) = psd.layer_info(&data, r.pos, li_end)
+            {
+                // A damaged layer section must not discard the document: keep the header and the
+                // merged image, drop the layers and say so. Without a merged image there is
+                // nothing to fall back to, so the original error stands.
+                if lm_end.checked_add(2).is_none_or(|n| n > data.len()) {
+                    return Err(e);
+                }
+                psd.layers.clear();
+                psd.warnings.push(format!("Layers could not be read ({e}); only the flattened image is available"));
             }
             r.pos = li_end;
             if r.pos + 4 <= lm_end {
@@ -425,6 +438,10 @@ impl Psd {
                 }
                 r.pos = end;
             }
+        }
+        if !psd.layers.is_empty() {
+            // A 16/32-bit layer block recovered the layers.
+            psd.warnings.clear();
         }
         psd.merged_offset = lm_end;
         Ok(psd)
