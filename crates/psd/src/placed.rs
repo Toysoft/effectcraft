@@ -206,7 +206,9 @@ fn style_map(style: &str, b: f64, x: f64, y: f64, fw: f64, fh: f64) -> [f64; 2] 
 
 /// The projective map taking the unit square's corners (0,0), (1,0), (1,1), (0,1) to `q`
 /// (Heckbert's square-to-quad), as a 3×3 matrix applied to (u, v, 1).
-fn square_to_quad(q: [[f64; 2]; 4]) -> [[f64; 3]; 3] {
+pub(crate) fn square_to_quad(q: [[f64; 2]; 4]) -> [[f64; 3]; 3] {
+    #[cfg(test)]
+    crate::counters::bump(&crate::counters::QUAD);
     let [p0, p1, p2, p3] = q;
     let sx = p0[0] - p1[0] + p2[0] - p3[0];
     let sy = p0[1] - p1[1] + p2[1] - p3[1];
@@ -219,6 +221,11 @@ fn square_to_quad(q: [[f64; 2]; 4]) -> [[f64; 3]; 3] {
     let g = (sx * dy2 - dx2 * sy) / den;
     let h = (dx1 * sy - sx * dy1) / den;
     [[p1[0] - p0[0] + g * p1[0], p3[0] - p0[0] + h * p3[0], p0[0]], [p1[1] - p0[1] + g * p1[1], p3[1] - p0[1] + h * p3[1], p0[1]], [g, h, 1.0]]
+}
+
+/// The baked size of placed content with document-space bounds `bb` at `k` pixels per document pixel.
+fn size_for(bb: [f64; 4], k: f64) -> (u32, u32) {
+    (((bb[2] - bb[0]) * k).ceil().clamp(1.0, 16384.0) as u32, ((bb[3] - bb[1]) * k).ceil().clamp(1.0, 16384.0) as u32)
 }
 
 impl SmartObject {
@@ -237,11 +244,15 @@ impl SmartObject {
 
     /// A content point (pixels of a `w`×`h` content) in document pixels: the warp, then the quad.
     pub fn map(&self, p: [f64; 2], w: f64, h: f64) -> [f64; 2] {
+        self.map_with(&square_to_quad(self.quad), p, w, h)
+    }
+
+    /// [`Self::map`] with the quad's projective matrix already solved (`square_to_quad(self.quad)`).
+    fn map_with(&self, m: &[[f64; 3]; 3], p: [f64; 2], w: f64, h: f64) -> [f64; 2] {
         let p = match &self.warp {
             Some(wp) => wp.apply(p, w, h),
             None => p,
         };
-        let m = square_to_quad(self.quad);
         let (u, v) = (p[0] / w.max(1e-9), p[1] / h.max(1e-9));
         let z = m[2][0] * u + m[2][1] * v + m[2][2];
         let z = if z.abs() < 1e-12 { 1e-12 } else { z };
@@ -250,11 +261,15 @@ impl SmartObject {
 
     /// The document-space bounds (x0, y0, x1, y1) of the placed (warped) content.
     pub fn placed_bounds(&self, w: f64, h: f64) -> [f64; 4] {
+        self.bounds_with(&square_to_quad(self.quad), w, h)
+    }
+
+    fn bounds_with(&self, m: &[[f64; 3]; 3], w: f64, h: f64) -> [f64; 4] {
         let n = 32;
         let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
         for j in 0..=n {
             for i in 0..=n {
-                let p = self.map([i as f64 / n as f64 * w, j as f64 / n as f64 * h], w, h);
+                let p = self.map_with(m, [i as f64 / n as f64 * w, j as f64 / n as f64 * h], w, h);
                 b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
             }
         }
@@ -263,8 +278,7 @@ impl SmartObject {
 
     /// The baked size for a `w`×`h` content at `k` pixels per document pixel.
     pub fn placed_size(&self, w: f64, h: f64, k: f64) -> (u32, u32) {
-        let bb = self.placed_bounds(w, h);
-        (((bb[2] - bb[0]) * k).ceil().clamp(1.0, 16384.0) as u32, ((bb[3] - bb[1]) * k).ceil().clamp(1.0, 16384.0) as u32)
+        size_for(self.placed_bounds(w, h), k)
     }
 
     /// Bake the content (straight RGBA) as placed: warped and mapped by the quad, rendered at
@@ -275,10 +289,12 @@ impl SmartObject {
         if content.width == 0 || content.height == 0 {
             return None;
         }
-        let bb = self.placed_bounds(cw, ch);
+        // The quad is solved once for the bounds, the size and the whole grid.
+        let m = square_to_quad(self.quad);
+        let bb = self.bounds_with(&m, cw, ch);
         let (ow, oh) = match size {
             Some((w, h)) => (w.max(1), h.max(1)),
-            None => self.placed_size(cw, ch, k),
+            None => size_for(bb, k),
         };
         let (ow, oh) = (ow as usize, oh as usize);
         // A forward grid, filled triangle by triangle with inverse barycentric sampling.
@@ -288,7 +304,7 @@ impl SmartObject {
         for j in 0..=n {
             for i in 0..=n {
                 let s = [i as f64 / n as f64 * cw, j as f64 / n as f64 * ch];
-                let d = self.map(s, cw, ch);
+                let d = self.map_with(&m, s, cw, ch);
                 dst.push([(d[0] - bb[0]) * k, (d[1] - bb[1]) * k]);
                 src.push(s);
             }
@@ -319,6 +335,10 @@ impl SmartObject {
                     if den.abs() < 1e-12 {
                         continue;
                     }
+                    // Loop-invariant per triangle: the source corners and the barycentric coefficients.
+                    let [sa, sb, sc] = tri.map(|t| src[t]);
+                    let (l1y, l1x) = (b[1] - c[1], c[0] - b[0]);
+                    let (l2y, l2x) = (c[1] - a[1], a[0] - c[0]);
                     let x0 = a[0].min(b[0]).min(c[0]).floor().max(0.0) as usize;
                     let x1 = (a[0].max(b[0]).max(c[0]).ceil() as usize).min(ow);
                     let y0 = a[1].min(b[1]).min(c[1]).floor().max(0.0) as usize;
@@ -326,13 +346,12 @@ impl SmartObject {
                     for y in y0..y1 {
                         for x in x0..x1 {
                             let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
-                            let l1 = ((b[1] - c[1]) * (px - c[0]) + (c[0] - b[0]) * (py - c[1])) / den;
-                            let l2 = ((c[1] - a[1]) * (px - c[0]) + (a[0] - c[0]) * (py - c[1])) / den;
+                            let l1 = (l1y * (px - c[0]) + l1x * (py - c[1])) / den;
+                            let l2 = (l2y * (px - c[0]) + l2x * (py - c[1])) / den;
                             let l3 = 1.0 - l1 - l2;
                             if l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9 {
                                 continue;
                             }
-                            let [sa, sb, sc] = tri.map(|t| src[t]);
                             let sx = sa[0] * l1 + sb[0] * l2 + sc[0] * l3;
                             let sy = sa[1] * l1 + sb[1] * l2 + sc[1] * l3;
                             out[y * ow + x] = sample(sx, sy);
