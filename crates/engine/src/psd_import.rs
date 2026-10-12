@@ -337,13 +337,21 @@ fn layer_origin(pl: &effectcraft_psd::Layer, retain: bool, layer: &Layer) -> [f6
     [0.0, 0.0]
 }
 
+/// Sets a scalar property; a non-finite value (from corrupt transforms) keeps the default.
 fn set_scalar(l: &mut Layer, path: &str, v: f64) {
+    if !v.is_finite() {
+        return;
+    }
     if let Some(p) = l.props.prop_mut(path) {
         p.value = Value::Scalar(v);
     }
 }
 
+/// Sets a 2D property; a non-finite component (from corrupt transforms) keeps the default.
 fn set_vec2(l: &mut Layer, path: &str, v: [f64; 2]) {
+    if !v.iter().all(|c| c.is_finite()) {
+        return;
+    }
     if let Some(p) = l.props.prop_mut(path) {
         p.value = match p.value {
             Value::Vec3(o) => Value::Vec3([v[0], v[1], o[2]]),
@@ -365,8 +373,10 @@ fn text_doc(t: &effectcraft_psd::TextInfo) -> TextDoc {
     d.set_text(&t.text);
     let [xx, xy, yx, yy, _, _] = t.transform;
     let scale = (xx * yy - xy * yx).abs().sqrt().max(1e-6);
-    if let Some(s) = t.style.size {
-        d.size = s * scale;
+    // A transform too large to multiply (inf) falls back to 1×; products below stay finite.
+    let scale = if scale.is_finite() { scale } else { 1.0 };
+    if let Some(s) = t.style.size.map(|s| s * scale).filter(|s| s.is_finite() && *s > 0.0) {
+        d.size = s;
     }
     if let Some(f) = &t.style.font {
         let (fam, style) = font_names(f);
@@ -385,19 +395,20 @@ fn text_doc(t: &effectcraft_psd::TextInfo) -> TextDoc {
         Some(6) => Justify::JustifyAll,
         _ => Justify::Left,
     };
-    if let Some(tr) = t.style.tracking {
+    if let Some(tr) = t.style.tracking.filter(|v| v.is_finite()) {
         d.tracking = tr;
     }
-    if let Some(l) = t.style.leading {
-        d.leading = Some(l * scale);
-    }
+    d.leading = t.style.leading.map(|l| l * scale).filter(|l| l.is_finite());
     d.faux_bold = t.style.faux_bold;
     d.faux_italic = t.style.faux_italic;
     if t.style.box_text
         && let Some([l, top, r, b]) = t.bounds
     {
-        d.box_size = Some([(r - l) * scale, (b - top) * scale]);
-        d.box_pos = [l * scale, top * scale];
+        let (size, pos) = ([(r - l) * scale, (b - top) * scale], [l * scale, top * scale]);
+        if size.iter().chain(&pos).all(|v| v.is_finite()) {
+            d.box_size = Some(size);
+            d.box_pos = pos;
+        }
     }
     d
 }
@@ -719,5 +730,33 @@ mod tests {
         assert_eq!(blend_mode("pass"), BlendMode::Normal);
         assert_eq!(desc_blend(Some("linearDodge")), Some(BlendMode::LinearDodge));
         assert_eq!(font_names("Inter-Bold"), ("Inter".into(), "Bold".into()));
+    }
+
+    #[test]
+    fn non_finite_text_values_never_reach_the_layer() {
+        let style = effectcraft_psd::engine_data::TextStyle {
+            size: Some(f64::NAN),
+            tracking: Some(f64::INFINITY),
+            leading: Some(f64::NEG_INFINITY),
+            ..Default::default()
+        };
+        let t = effectcraft_psd::TextInfo {
+            text: "x".into(),
+            transform: [f64::INFINITY, 0.0, 0.0, 1.0, f64::NAN, 1.0],
+            style,
+            bounds: Some([0.0, 0.0, f64::INFINITY, 1.0]),
+        };
+        let d = text_doc(&t);
+        assert!(d.size.is_finite() && d.tracking.is_finite());
+        assert!(d.leading.is_none_or(f64::is_finite));
+        assert!(d.box_size.is_none_or(|b| b.iter().all(|v| v.is_finite())));
+        let mut proj = Project::default();
+        let comp = Comp::new(64, 64, FrameRate::FPS_24, Tick::ZERO);
+        let l = text_layer(&mut proj, &comp, "t", &t);
+        match l.props.prop("transform/position").map(|p| &p.value) {
+            Some(Value::Vec2(v)) => assert!(v.iter().all(|c| c.is_finite())),
+            Some(Value::Vec3(v)) => assert!(v.iter().all(|c| c.is_finite())),
+            other => panic!("unexpected position {other:?}"),
+        }
     }
 }

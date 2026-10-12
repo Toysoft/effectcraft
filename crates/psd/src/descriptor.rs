@@ -174,17 +174,17 @@ fn read_value(r: &mut Reader, ty: &[u8; 4], depth: usize) -> Result<DValue> {
             let n = r.u32()?;
             DValue::ObjectArray(n, read_descriptor_at(r, depth + 1)?)
         }
-        b"doub" => DValue::Double(r.f64()?),
+        b"doub" => DValue::Double(r.f64_finite()?),
         b"UntF" => {
             let unit = String::from_utf8_lossy(&r.tag()?).into_owned();
-            DValue::UnitFloat(unit, r.f64()?)
+            DValue::UnitFloat(unit, r.f64_finite()?)
         }
         b"UnFl" => {
             let unit = String::from_utf8_lossy(&r.tag()?).into_owned();
             let n = r.u32()? as usize;
             let mut v = Vec::with_capacity(n.min(1024));
             for _ in 0..n {
-                v.push(r.f64()?);
+                v.push(r.f64_finite()?);
             }
             DValue::UnitFloats(unit, v)
         }

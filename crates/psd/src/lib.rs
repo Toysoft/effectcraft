@@ -120,7 +120,7 @@ pub struct Rect {
 
 impl Rect {
     pub fn new(left: i32, top: i32, width: i32, height: i32) -> Rect {
-        Rect { top, left, bottom: top + height, right: left + width }
+        Rect { top, left, bottom: top.saturating_add(height), right: left.saturating_add(width) }
     }
     pub fn width(&self) -> u32 {
         (i64::from(self.right) - i64::from(self.left)).clamp(0, i64::from(u32::MAX)) as u32
@@ -601,6 +601,10 @@ impl Psd {
                 for v in &mut t {
                     *v = r.f64()?;
                 }
+                // A transform with NaN/inf is unusable: fall back to the identity.
+                if t.iter().any(|v| !v.is_finite()) {
+                    t = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+                }
                 let _text_ver = r.u16()?;
                 let _desc_ver = r.u32()?;
                 let d = descriptor::read_descriptor(&mut r)?;
@@ -655,9 +659,13 @@ impl Psd {
             }
             b"expA" => {
                 let _ver = r.u16()?;
-                let exposure = r.f32()? as f64;
-                let offset = r.f32()? as f64;
-                let gamma = r.f32()? as f64;
+                let mut finite = |default: f64| -> Result<f64> {
+                    let v = f64::from(r.f32()?);
+                    Ok(if v.is_finite() { v } else { default })
+                };
+                let exposure = finite(0.0)?;
+                let offset = finite(0.0)?;
+                let gamma = finite(1.0)?;
                 l.adjustment = Some(Adjustment::Exposure { exposure, offset, gamma });
             }
             b"curv" | b"blnc" | b"post" | b"thrs" | b"selc" | b"mixr" | b"phfl" | b"vibA" | b"blwh" | b"grdm" | b"clrL" if l.adjustment.is_none() => {
@@ -702,7 +710,7 @@ impl Psd {
                 let _ty = r.u32()?;
                 let mut t = [0.0; 8];
                 for v in &mut t {
-                    *v = r.f64()?;
+                    *v = r.f64_finite()?;
                 }
                 l.smart_object = Some(SmartObject { uuid, quad: [[t[0], t[1]], [t[2], t[3]], [t[4], t[5]], [t[6], t[7]]], size: None, warp: None });
             }
@@ -908,7 +916,25 @@ impl Psd {
                 out
             }
             16 => raw.as_chunks::<2>().0.iter().take(w * h).map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect(),
-            32 => raw.as_chunks::<4>().0.iter().take(w * h).map(|c| f32::from_be_bytes([c[0], c[1], c[2], c[3]])).collect(),
+            // NaN reads as 0, +inf as white (1.0, like the integer depths' maximum), -inf as 0.
+            32 => raw
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .take(w * h)
+                .map(|c| {
+                    let v = f32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+                    if v.is_nan() {
+                        0.0
+                    } else if v == f32::INFINITY {
+                        1.0
+                    } else if v == f32::NEG_INFINITY {
+                        0.0
+                    } else {
+                        v
+                    }
+                })
+                .collect(),
             _ => raw.iter().take(w * h).map(|&b| b as f32 / 255.0).collect(),
         }
     }

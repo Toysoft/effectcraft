@@ -75,8 +75,8 @@ impl Warp {
             if let Some(DValue::ObjectArray(_, pts)) = env.get("meshPoints") {
                 let xs = floats(pts.get("Hrzn"));
                 let ys = floats(pts.get("Vrtc"));
-                let n = (3 * cols + 1) * (3 * rows + 1);
-                if xs.len() == n && ys.len() == n {
+                let n = cols.checked_mul(3).zip(rows.checked_mul(3)).and_then(|(c, r)| (c + 1).checked_mul(r + 1));
+                if n.is_some_and(|n| xs.len() == n && ys.len() == n) {
                     w.cols = cols;
                     w.rows = rows;
                     w.mesh = xs.into_iter().zip(ys).map(|(x, y)| [x, y]).collect();
@@ -94,7 +94,8 @@ impl Warp {
         let (bw, bh) = (r - l, b - t);
         let (u, v) = ((p[0] - l) / bw, (p[1] - t) / bh);
         if self.style == "warpCustom" {
-            return self.mesh_point(u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+            // A mesh that does not match cols × rows (public fields) leaves the point where it is.
+            return self.mesh_point(u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)).unwrap_or(p);
         }
         // Styles work in a centred frame (pixels), optionally rotated a quarter turn.
         let (x, y, fw, fh) = if self.rotate_vertical { (bh * (v - 0.5), -bw * (u - 0.5), bh, bw) } else { (bw * (u - 0.5), bh * (v - 0.5), bw, bh) };
@@ -110,13 +111,16 @@ impl Warp {
     }
 
     /// A point of the custom quilt mesh at (u, v) ∈ [0, 1]².
-    fn mesh_point(&self, u: f64, v: f64) -> [f64; 2] {
+    fn mesh_point(&self, u: f64, v: f64) -> Option<[f64; 2]> {
         let (cols, rows) = (self.cols, self.rows);
+        if cols == 0 || rows == 0 {
+            return None;
+        }
         let pu = (u * cols as f64).min(cols as f64 - 1e-9);
         let pv = (v * rows as f64).min(rows as f64 - 1e-9);
         let (ci, cj) = (pu.floor() as usize, pv.floor() as usize);
         let (fu, fv) = (pu - ci as f64, pv - cj as f64);
-        let stride = 3 * cols + 1;
+        let stride = cols.checked_mul(3)?.checked_add(1)?;
         let bern = |t: f64| {
             let s = 1.0 - t;
             [s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t]
@@ -125,13 +129,14 @@ impl Warp {
         let mut out = [0.0; 2];
         for j in 0..4 {
             for i in 0..4 {
-                let q = self.mesh[(3 * cj + j) * stride + 3 * ci + i];
+                let idx = cj.saturating_mul(3).saturating_add(j).saturating_mul(stride).saturating_add(ci.saturating_mul(3)).saturating_add(i);
+                let q = self.mesh.get(idx)?;
                 let k = bu[i] * bv[j];
                 out[0] += q[0] * k;
                 out[1] += q[1] * k;
             }
         }
-        out
+        Some(out)
     }
 }
 
@@ -406,5 +411,18 @@ mod tests {
         assert!(at(5, 10)[0] > 0.9 && at(5, 10)[3] > 0.99, "{:?}", at(5, 10));
         assert!(at(35, 10)[1] > 0.9, "{:?}", at(35, 10));
         assert_eq!(at(38, 1)[3], 0.0, "outside the trapezoid");
+    }
+
+    #[test]
+    fn custom_warp_with_a_missing_or_short_mesh_does_not_panic() {
+        let base = Warp { style: "warpCustom".into(), bounds: [0.0, 0.0, 20.0, 10.0], cols: 1, rows: 1, ..Default::default() };
+        // Empty and too-short meshes leave the point where it is.
+        assert_eq!(base.apply([5.0, 5.0], 20.0, 10.0), [5.0, 5.0]);
+        let short = Warp { mesh: vec![[0.0, 0.0]; 5], ..base.clone() };
+        assert_eq!(short.apply([5.0, 5.0], 20.0, 10.0), [5.0, 5.0]);
+        for (cols, rows) in [(0, 0), (0, 3), (usize::MAX, 1), (1, usize::MAX), (usize::MAX, usize::MAX)] {
+            let w = Warp { cols, rows, ..base.clone() };
+            assert_eq!(w.apply([5.0, 5.0], 20.0, 10.0), [5.0, 5.0]);
+        }
     }
 }

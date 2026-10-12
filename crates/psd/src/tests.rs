@@ -318,3 +318,36 @@ fn thousands_of_nested_groups_do_not_overflow_a_small_stack() {
         .unwrap();
     assert_eq!(h.join().unwrap(), 5000 - MAX_GROUP_DEPTH);
 }
+
+#[test]
+fn non_finite_transform_and_exposure_values_are_dropped() {
+    let mut d = WDoc::new(16, 16);
+    d.layers = vec![
+        WLayer::empty("Title", vec![text_block("x", [f64::NAN, f64::INFINITY], "Inter", 12.0, [0.0; 3], 0)]),
+        WLayer::empty("Exp", vec![exposure_block(f32::NAN, f32::INFINITY, f32::NEG_INFINITY)]),
+    ];
+    let p = Psd::parse(write(&d)).unwrap();
+    let t = p.layers[0].text.as_ref().unwrap();
+    assert!(t.transform.iter().all(|v| v.is_finite()));
+    assert_eq!(t.transform, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(p.layers[1].adjustment, Some(Adjustment::Exposure { exposure: 0.0, offset: 0.0, gamma: 1.0 }));
+}
+
+#[test]
+fn non_finite_32_bit_samples_become_finite() {
+    let mut d = WDoc::new(4, 4);
+    d.depth = 32;
+    d.layers = vec![WLayer::solid("L", Rect::new(0, 0, 4, 4), [0.5, 0.5, 0.5, 1.0])];
+    let p = Psd::parse(write(&d)).unwrap();
+    let raw: Vec<u8> = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.25].iter().flat_map(|v| v.to_be_bytes()).collect();
+    let s = p.samples(&raw, 4, 1);
+    assert_eq!(s, vec![0.0, 1.0, 0.0, 0.25]);
+    assert!(p.to_rgb(&[Some(s.clone()), Some(s.clone()), Some(s)], 1).iter().all(|v| v.is_finite()));
+}
+
+#[test]
+fn rect_new_near_i32_max_saturates() {
+    let r = Rect::new(i32::MAX, i32::MAX, 1, i32::MAX);
+    assert_eq!((r.right, r.bottom), (i32::MAX, i32::MAX));
+    assert!(r.is_empty());
+}
