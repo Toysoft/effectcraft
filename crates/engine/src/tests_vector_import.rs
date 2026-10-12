@@ -283,3 +283,30 @@ fn paste_svg_rejects_text_that_is_not_usable_svg() {
     assert!(s.execute_checked("edit.pasteSvg", json!({})).is_err());
     assert_eq!(s.active_comp().unwrap().layers.len(), 1, "nothing pasted");
 }
+
+#[test]
+fn psd_with_thousands_of_nested_groups_imports_on_a_small_stack() {
+    let mut d = WDoc::new(8, 8);
+    let n = 5000;
+    d.layers = (0..n).map(|_| WLayer::group_end()).collect();
+    for i in 0..n {
+        d.layers.push(WLayer::solid(&format!("L{i}"), Rect::new(0, 0, 2, 2), [1.0; 4]));
+        d.layers.push(WLayer::group(&format!("G{i}"), true, *b"norm"));
+    }
+    let path = tmp("nested.psd");
+    std::fs::write(&path, effectcraft_psd::write::write(&d)).unwrap();
+    let h = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || {
+            let mut s = Session::default();
+            let r = s.execute_checked("file.import", json!({"paths": [path], "importAs": "composition"})).unwrap();
+            let warned = r["errors"].as_array().is_some_and(|e| e.len() == 1 && e[0].as_str().is_some_and(|m| m.contains("flattened")));
+            // 64 nested group comps plus the root comp.
+            let comps = s.project.items.values().filter(|i| matches!(i.kind, ItemKind::Comp(_))).count();
+            (warned, comps)
+        })
+        .unwrap();
+    let (warned, comps) = h.join().unwrap();
+    assert_eq!(comps, 65);
+    assert!(warned);
+}

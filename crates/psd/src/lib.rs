@@ -306,6 +306,10 @@ impl Layer {
     }
 }
 
+/// How deep groups nest in [`Psd::tree`]; deeper ones are flattened (a hostile file can nest
+/// thousands, and walking or dropping that tree would overflow the stack).
+pub const MAX_GROUP_DEPTH: usize = 64;
+
 /// The layer tree, top of the stack first.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node {
@@ -742,13 +746,39 @@ impl Psd {
         Ok(vm)
     }
 
-    /// The layer tree, top of the stack first.
+    /// The layer tree, top of the stack first. Groups nest at most [`MAX_GROUP_DEPTH`] deep (see
+    /// [`Psd::tree_report`]).
     pub fn tree(&self) -> Vec<Node> {
+        self.tree_report().0
+    }
+
+    /// The layer tree plus the number of groups nested deeper than [`MAX_GROUP_DEPTH`]. Those
+    /// are flattened into their deepest allowed ancestor: their children stay, in order, and
+    /// the group record itself becomes a plain [`Node::Layer`], so no layer is lost and the
+    /// tree (and its `Drop`, `Clone` and `PartialEq`) cannot recurse deeper than the limit.
+    pub fn tree_report(&self) -> (Vec<Node>, usize) {
         let mut stack: Vec<Vec<Node>> = vec![vec![]];
+        // Dividers seen while `MAX_GROUP_DEPTH` groups were already open.
+        let mut flattened_open = 0usize;
+        let mut flattened = 0usize;
         for l in &self.layers {
             match l.section {
-                Section::Divider => stack.push(vec![]),
+                Section::Divider => {
+                    if stack.len() > MAX_GROUP_DEPTH {
+                        flattened_open += 1;
+                    } else {
+                        stack.push(vec![]);
+                    }
+                }
                 Section::OpenFolder | Section::ClosedFolder => {
+                    if flattened_open > 0 {
+                        flattened_open -= 1;
+                        flattened += 1;
+                        if let Some(top) = stack.last_mut() {
+                            top.push(Node::Layer(l.index));
+                        }
+                        continue;
+                    }
                     let children = if stack.len() > 1 { stack.pop().unwrap_or_default() } else { vec![] };
                     if let Some(top) = stack.last_mut() {
                         top.push(Node::Group { layer: l.index, children });
@@ -767,6 +797,7 @@ impl Psd {
                 top.extend(c);
             }
         }
+        // Depth is at most `MAX_GROUP_DEPTH`, so recursion is bounded.
         fn rev(v: &mut Vec<Node>) {
             v.reverse();
             for n in v {
@@ -777,7 +808,7 @@ impl Psd {
         }
         let mut out = stack.pop().unwrap_or_default();
         rev(&mut out);
-        out
+        (out, flattened)
     }
 
     fn bytes_per_sample(&self) -> usize {

@@ -111,7 +111,11 @@ struct Ctx<'a> {
 pub fn import(proj: &mut Project, psd: &Psd, path: &str, name: &str, retain: bool, rate: FrameRate, duration: Tick) -> PsdImport {
     let folder = proj.add_item(&format!("{name} Layers"), Label::Yellow, None, ItemKind::Folder);
     let mut cx = Ctx { psd, path, retain, folder, rate, duration, items: vec![], warnings: vec![] };
-    let comp = build_comp(proj, &mut cx, name, &psd.tree(), None);
+    let (tree, flattened) = psd.tree_report();
+    if flattened > 0 {
+        cx.warnings.push(format!("{flattened} group(s) nested deeper than {} levels were flattened into their parent", effectcraft_psd::MAX_GROUP_DEPTH));
+    }
+    let comp = build_comp(proj, &mut cx, name, &tree, None);
     PsdImport { comp, folder, items: cx.items, warnings: cx.warnings }
 }
 

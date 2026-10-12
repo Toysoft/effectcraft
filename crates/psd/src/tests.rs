@@ -252,3 +252,69 @@ fn huge_layer_bounds_error_instead_of_allocating() {
     let p = Psd::parse(bytes).unwrap();
     assert!(matches!(p.layer_pixels(0, false), Err(Error::Unsupported(_))));
 }
+
+/// `n` groups nested in each other, each holding one pixel layer (file order: bottom first).
+fn nested_groups_doc(n: usize) -> WDoc {
+    let mut d = WDoc::new(4, 4);
+    for _ in 0..n {
+        d.layers.push(WLayer::group_end());
+    }
+    for i in 0..n {
+        d.layers.push(WLayer::solid(&format!("L{i}"), Rect::new(0, 0, 1, 1), [1.0; 4]));
+        d.layers.push(WLayer::group(&format!("G{i}"), true, *b"norm"));
+    }
+    d
+}
+
+fn depth_of(nodes: &[Node]) -> usize {
+    nodes.iter().map(|n| if let Node::Group { children, .. } = n { 1 + depth_of(children) } else { 0 }).max().unwrap_or(0)
+}
+
+fn layer_indices(nodes: &[Node], out: &mut Vec<usize>) {
+    for n in nodes {
+        match n {
+            Node::Layer(i) => out.push(*i),
+            Node::Group { layer, children } => {
+                out.push(*layer);
+                layer_indices(children, out);
+            }
+        }
+    }
+}
+
+#[test]
+fn deeply_nested_groups_are_flattened_at_the_depth_limit() {
+    assert_eq!(MAX_GROUP_DEPTH, 64);
+    let n = 70;
+    let p = Psd::parse(write(&nested_groups_doc(n))).unwrap();
+    let (t, flattened) = p.tree_report();
+    assert_eq!(depth_of(&t), MAX_GROUP_DEPTH);
+    assert_eq!(flattened, 6);
+    // No layer or group record is lost, each appears exactly once (dividers are not nodes).
+    let mut seen = vec![];
+    layer_indices(&t, &mut seen);
+    seen.sort_unstable();
+    assert_eq!(seen, (n..p.layers.len()).collect::<Vec<_>>());
+    // At the limit nothing is flattened.
+    let (t, flattened) = Psd::parse(write(&nested_groups_doc(MAX_GROUP_DEPTH))).unwrap().tree_report();
+    assert_eq!((depth_of(&t), flattened), (MAX_GROUP_DEPTH, 0));
+}
+
+#[test]
+fn thousands_of_nested_groups_do_not_overflow_a_small_stack() {
+    let bytes = write(&nested_groups_doc(5000));
+    let h = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || {
+            let p = Psd::parse(bytes).unwrap();
+            let t = p.tree();
+            let c = t.clone();
+            assert_eq!(t, c);
+            let (_, flattened) = p.tree_report();
+            drop(t);
+            drop(c);
+            flattened
+        })
+        .unwrap();
+    assert_eq!(h.join().unwrap(), 5000 - MAX_GROUP_DEPTH);
+}
