@@ -239,6 +239,9 @@ fn matches(d: &CompDraft, w: u32, h: u32, par: f64, fps: f64) -> bool {
     w == d.width && h == d.height && (par - d.pixel_aspect).abs() < 1e-3 && (fps - d.fps).abs() < 1e-3
 }
 
+/// Height kept for a tab's controls: that of the tallest tab (Advanced).
+const TAB_BODY_HEIGHT: f32 = 291.0;
+
 /// Draw the dialog. Returns `Some(params)` when OK is pressed, `Some(Null)` on Cancel. `custom`
 /// are the presets the user saved; saving or deleting one pushes its engine command to `cmds`.
 pub fn show(
@@ -268,6 +271,7 @@ pub fn show(
     });
     ui.separator();
     let rate = FrameRate::from_f64(d.fps);
+    let body_top = ui.cursor().top();
     match d.tab {
         Tab::Basic => {
             egui::Grid::new("comp-basic").num_columns(2).spacing([12.0, 9.0]).show(ui, |ui| {
@@ -457,6 +461,8 @@ pub fn show(
             });
         }
     }
+    // Every tab takes the height of the tallest one, so Cancel and OK stay put between tabs.
+    ui.add_space((TAB_BODY_HEIGHT - (ui.cursor().top() - body_top)).max(0.0));
     ui.add_space(14.0);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

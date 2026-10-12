@@ -83,3 +83,18 @@ fn a_preset_name_cannot_be_a_built_in_one() {
     assert!(h.state().auto.find("dialog.comp.presetName").is_none());
     assert!(preset_names(&h).is_empty());
 }
+
+/// Cancel and OK stay where they are when switching between Basic, Advanced and 3D Renderer.
+#[test]
+fn composition_settings_buttons_stay_put_between_tabs() {
+    let mut h = harness();
+    open_settings(&mut h);
+    let rects = |h: &Harness<'_, EffectcraftApp>| {
+        ["dialog.comp.ok", "dialog.comp.cancel", "dialog.comp.name"].map(|id| h.state().auto.find(id).unwrap_or_else(|| panic!("no {id}")).rect)
+    };
+    let basic = rects(&h);
+    for tab in ["advanced", "renderer", "basic"] {
+        click(&mut h, &format!("dialog.comp.tab.{tab}"));
+        assert_eq!(rects(&h), basic, "{tab}");
+    }
+}
