@@ -35,7 +35,7 @@ pub struct Warp {
     pub mesh: Vec<[f64; 2]>,
 }
 
-fn floats(v: Option<&DValue>) -> Vec<f64> {
+pub(crate) fn floats(v: Option<&DValue>) -> Vec<f64> {
     match v {
         Some(DValue::UnitFloats(_, v)) => v.clone(),
         Some(DValue::List(l)) => l
@@ -48,6 +48,16 @@ fn floats(v: Option<&DValue>) -> Vec<f64> {
             .collect(),
         _ => vec![],
     }
+}
+
+/// The eight numbers of a transform entry (`Trnf`, `nonAffineTransform`), when it has exactly eight.
+pub(crate) fn eight(d: &Descriptor, key: &str) -> Option<[f64; 8]> {
+    floats(d.get(key)).try_into().ok()
+}
+
+/// The corner quad (top-left, top-right, bottom-right, bottom-left) from x0 y0 … x3 y3.
+pub(crate) fn quad_from(t: [f64; 8]) -> [[f64; 2]; 4] {
+    [[t[0], t[1]], [t[2], t[3]], [t[4], t[5]], [t[6], t[7]]]
 }
 
 impl Warp {

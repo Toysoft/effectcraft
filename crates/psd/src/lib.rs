@@ -694,27 +694,12 @@ impl Psd {
                 let _dver = r.u32()?;
                 let d = descriptor::read_descriptor(&mut r)?;
                 let uuid = d.text("Idnt").unwrap_or_default().to_string();
-                let nums = |k: &str| -> Option<Vec<f64>> {
-                    match d.get(k)? {
-                        DValue::List(l) => Some(
-                            l.iter()
-                                .filter_map(|v| match v {
-                                    DValue::Double(x) | DValue::UnitFloat(_, x) => Some(*x),
-                                    DValue::Integer(i) => Some(*i as f64),
-                                    _ => None,
-                                })
-                                .collect(),
-                        ),
-                        DValue::UnitFloats(_, v) => Some(v.clone()),
-                        _ => None,
-                    }
-                };
-                let t = nums("Trnf").filter(|t| t.len() == 8).unwrap_or_else(|| vec![0.0; 8]);
+                let t = placed::eight(&d, "Trnf").unwrap_or([0.0; 8]);
                 // The non-affine transform when present (perspective), else the transform.
-                let t = nums("nonAffineTransform").filter(|t| t.len() == 8).unwrap_or(t);
+                let t = placed::eight(&d, "nonAffineTransform").unwrap_or(t);
                 let size = d.obj("Sz  ").and_then(|s| Some([s.num("Wdth")?, s.num("Hght")?]));
                 let warp = d.obj("warp").and_then(placed::Warp::read);
-                l.smart_object = Some(SmartObject { uuid, quad: [[t[0], t[1]], [t[2], t[3]], [t[4], t[5]], [t[6], t[7]]], size, warp });
+                l.smart_object = Some(SmartObject { uuid, quad: placed::quad_from(t), size, warp });
             }
             b"PlLd" if l.smart_object.is_none() => {
                 let _id = r.tag()?;
@@ -729,7 +714,7 @@ impl Psd {
                 for v in &mut t {
                     *v = r.f64_finite()?;
                 }
-                l.smart_object = Some(SmartObject { uuid, quad: [[t[0], t[1]], [t[2], t[3]], [t[4], t[5]], [t[6], t[7]]], size: None, warp: None });
+                l.smart_object = Some(SmartObject { uuid, quad: placed::quad_from(t), size: None, warp: None });
             }
             b"vmsk" | b"vsms" => {
                 let _ver = r.u32()?;
@@ -850,32 +835,60 @@ impl Psd {
         let mut r = Reader::at(&self.data[..end], offset);
         let comp = r.u16()?;
         decode_pixels(w, h)?;
+        let mut planes = self.open_planes(comp, &mut r, 1, 1, w, h)?;
+        if let PlaneStream::Zip(v) = &mut planes {
+            v.resize(self.row_bytes(w) * h, 0);
+        }
+        let raw = self.decode_plane(comp, &planes, &mut r, 0, w, h)?;
+        Ok(self.samples(&raw, w, h))
+    }
+
+    /// Prepare the pixel data at `r` (just after the compression field) of `total` planes of
+    /// `w`×`h` samples, of which the first `want` are decoded: the RLE row sizes of every plane,
+    /// or the inflated ZIP data, which holds all planes one after another.
+    fn open_planes(&self, comp: u16, r: &mut Reader, total: usize, want: usize, w: usize, h: usize) -> Result<PlaneStream> {
         let rowb = self.row_bytes(w);
-        let raw = match comp {
-            0 => r.bytes(rowb * h)?.to_vec(),
+        Ok(match comp {
+            0 => PlaneStream::Raw,
             1 => {
-                let mut counts = Vec::with_capacity(h.min(r.remaining() / 2));
-                for _ in 0..h {
+                let n = total.saturating_mul(h);
+                let mut counts = Vec::with_capacity(n.min(r.remaining() / 2));
+                for _ in 0..n {
                     counts.push(if self.psb { r.u32()? as usize } else { r.u16()? as usize });
                 }
-                let mut out = Vec::with_capacity(rowb * h);
-                for c in counts {
-                    unpack_bits(r.bytes(c)?, rowb, &mut out)?;
-                }
-                out
+                PlaneStream::Rle(counts)
             }
             2 | 3 => {
                 let rest = r.bytes(r.remaining())?;
-                let mut v = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(rest, rowb * h).map_err(|e| Error::Invalid(format!("zip: {e:?}")))?;
-                v.resize(rowb * h, 0);
-                if comp == 3 {
-                    self.unpredict(&mut v, w, h);
-                }
-                v
+                let v = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(rest, want * rowb * h).map_err(|e| Error::Invalid(format!("zip: {e:?}")))?;
+                PlaneStream::Zip(v)
             }
             c => return Err(Error::Unsupported(format!("compression {c}"))),
-        };
-        Ok(self.samples(&raw, w, h))
+        })
+    }
+
+    /// The raw bytes (`row_bytes(w)` × `h`, ZIP prediction undone) of plane `c`; raw and RLE
+    /// planes are read from `r` in order.
+    fn decode_plane(&self, comp: u16, planes: &PlaneStream, r: &mut Reader, c: usize, w: usize, h: usize) -> Result<Vec<u8>> {
+        let rowb = self.row_bytes(w);
+        Ok(match planes {
+            PlaneStream::Raw => r.bytes(rowb * h)?.to_vec(),
+            PlaneStream::Rle(counts) => {
+                let mut out = Vec::with_capacity(rowb * h);
+                for row in 0..h {
+                    let n = *counts.get(c * h + row).ok_or(Error::Truncated)?;
+                    unpack_bits(r.bytes(n)?, rowb, &mut out)?;
+                }
+                out
+            }
+            PlaneStream::Zip(v) => {
+                let mut plane = v.get(c * rowb * h..(c + 1) * rowb * h).ok_or(Error::Truncated)?.to_vec();
+                if comp == 3 {
+                    self.unpredict(&mut plane, w, h);
+                }
+                plane
+            }
+        })
     }
 
     fn row_bytes(&self, w: usize) -> usize {
@@ -985,39 +998,10 @@ impl Psd {
         let nch = self.channels as usize;
         let cc = self.mode.color_channels();
         let want = (cc + usize::from(self.merged_alpha)).min(nch);
-        let rowb = self.row_bytes(w);
         let mut planes: Vec<Option<Vec<f32>>> = vec![None; nch];
-        match comp {
-            0 => {
-                for p in planes.iter_mut().take(want) {
-                    *p = Some(self.samples(r.bytes(rowb * h)?, w, h));
-                }
-            }
-            1 => {
-                let mut counts = Vec::with_capacity((nch * h).min(r.remaining() / 2));
-                for _ in 0..nch * h {
-                    counts.push(if self.psb { r.u32()? as usize } else { r.u16()? as usize });
-                }
-                for (c, p) in planes.iter_mut().enumerate().take(want) {
-                    let mut out = Vec::with_capacity(rowb * h);
-                    for row in 0..h {
-                        unpack_bits(r.bytes(counts[c * h + row])?, rowb, &mut out)?;
-                    }
-                    *p = Some(self.samples(&out, w, h));
-                }
-            }
-            2 | 3 => {
-                let rest = r.bytes(r.remaining())?;
-                let v = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(rest, want * rowb * h).map_err(|e| Error::Invalid(format!("zip: {e:?}")))?;
-                for (c, p) in planes.iter_mut().enumerate().take(want) {
-                    let mut plane = v.get(c * rowb * h..(c + 1) * rowb * h).ok_or(Error::Truncated)?.to_vec();
-                    if comp == 3 {
-                        self.unpredict(&mut plane, w, h);
-                    }
-                    *p = Some(self.samples(&plane, w, h));
-                }
-            }
-            c => return Err(Error::Unsupported(format!("compression {c}"))),
+        let stream = self.open_planes(comp, &mut r, nch, want, w, h)?;
+        for (c, p) in planes.iter_mut().enumerate().take(want) {
+            *p = Some(self.samples(&self.decode_plane(comp, &stream, &mut r, c, w, h)?, w, h));
         }
         let alpha = if self.merged_alpha && nch > cc { planes[cc].take() } else { None };
         let mut data = Vec::with_capacity(w * h);
@@ -1111,6 +1095,15 @@ impl Psd {
         }
         Ok(Pixels { width: ow as u32, height: oh as u32, data: out })
     }
+}
+
+/// The pixel data of a run of planes, as prepared by `Psd::open_planes`.
+enum PlaneStream {
+    Raw,
+    /// RLE row byte counts of every plane, plane after plane.
+    Rle(Vec<usize>),
+    /// The inflated ZIP data of all planes.
+    Zip(Vec<u8>),
 }
 
 /// The next additional-information block at `*pos` (signature `8BIM`/`8B64`, key, length):

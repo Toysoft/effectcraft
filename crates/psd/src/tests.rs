@@ -406,3 +406,86 @@ fn header_damage_and_missing_merged_image_still_fail() {
     b.truncate(end);
     assert!(Psd::parse(b).is_err());
 }
+
+/// A ZIP plane body for the decoder: the plane delta-coded per row when `predict`.
+fn zip_body(raw: &[u8], w: usize, depth: u16, predict: bool) -> Vec<u8> {
+    if !predict {
+        return raw.to_vec();
+    }
+    let mut out = raw.to_vec();
+    let bps = usize::from(depth / 8);
+    for row in out.chunks_exact_mut(w * bps) {
+        if depth == 16 {
+            let mut prev = 0u16;
+            for c in row.as_chunks_mut::<2>().0 {
+                let x = u16::from_be_bytes([c[0], c[1]]);
+                c.copy_from_slice(&x.wrapping_sub(prev).to_be_bytes());
+                prev = x;
+            }
+        } else {
+            for i in (1..row.len()).rev() {
+                row[i] = row[i].wrapping_sub(row[i - 1]);
+            }
+        }
+    }
+    out
+}
+
+/// The same document with every channel and the merged image re-encoded as ZIP (`comp` 2) or
+/// ZIP with prediction (3), appended to the file data.
+fn rezip(p: &Psd, comp: u16) -> Psd {
+    let mut z = p.clone();
+    let mut data = p.data.to_vec();
+    let (depth, predict) = (p.depth, comp == 3);
+    let deflate = |body: &[u8]| {
+        let mut v = comp.to_be_bytes().to_vec();
+        v.extend(miniz_oxide::deflate::compress_to_vec_zlib(body, 6));
+        v
+    };
+    for (l, zl) in p.layers.iter().zip(&mut z.layers) {
+        for (c, zc) in l.channels.iter().zip(&mut zl.channels) {
+            let w = if c.id == -2 { l.mask.map_or(0, |m| m.rect.width() as usize) } else { l.rect.width() as usize };
+            let raw = &p.data[c.offset + 2..c.offset + c.len];
+            zc.offset = data.len();
+            data.extend(deflate(&zip_body(raw, w, depth, predict)));
+            zc.len = data.len() - zc.offset;
+        }
+    }
+    // The merged image: one ZIP stream holding all planes.
+    let (w, h) = (p.width as usize, p.height as usize);
+    let plane = w * h * usize::from(depth / 8);
+    let mut all = vec![];
+    for c in 0..usize::from(p.channels) {
+        let at = p.merged_offset + 2 + c * plane;
+        all.extend(zip_body(&p.data[at..at + plane], w, depth, predict));
+    }
+    z.merged_offset = data.len();
+    data.extend(deflate(&all));
+    z.data = data.into();
+    z
+}
+
+#[test]
+fn zip_channels_decode_like_raw_ones() {
+    for depth in [8, 16] {
+        let raw = Psd::parse(write(&doc_with_layers(depth, ColorMode::Rgb, false))).unwrap();
+        for comp in [2, 3] {
+            let zip = rezip(&raw, comp);
+            assert_eq!(zip.composite().unwrap().data, raw.composite().unwrap().data, "composite {depth} bit, compression {comp}");
+            for (i, canvas) in [(0, true), (0, false), (1, false), (2, false), (2, true)] {
+                let (want, got) = (raw.layer_pixels(i, canvas).unwrap(), zip.layer_pixels(i, canvas).unwrap());
+                assert_eq!(got.data, want.data, "layer {i} canvas {canvas}, {depth} bit, compression {comp}");
+            }
+        }
+    }
+}
+
+#[test]
+fn rle_composite_matches_the_raw_one() {
+    for depth in [8, 16] {
+        let raw = Psd::parse(write(&doc_with_layers(depth, ColorMode::Rgb, false))).unwrap();
+        let rle = Psd::parse(write(&doc_with_layers(depth, ColorMode::Rgb, true))).unwrap();
+        assert_eq!(rle.composite().unwrap().data, raw.composite().unwrap().data, "{depth} bit");
+        assert_eq!(rle.layer_pixels(2, true).unwrap().data, raw.layer_pixels(2, true).unwrap().data, "{depth} bit");
+    }
+}

@@ -2,6 +2,9 @@
 //! tree of dictionaries (`<< /Key value >>`), arrays (`[ ]`), numbers, names, booleans and
 //! strings (`(þÿ` + UTF-16BE with backslash escapes `)`). Read best-effort.
 
+/// Bytes that end a bare token or a `/Name` (besides whitespace).
+const DELIMITERS: &[u8] = b"[]<>/(";
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum EValue {
     Dict(Vec<(String, EValue)>),
@@ -121,7 +124,7 @@ impl P<'_> {
             b'(' => Some(EValue::Str(self.string())),
             _ => {
                 let start = self.i;
-                while self.i < self.b.len() && !self.b[self.i].is_ascii_whitespace() && !b"[]<>/(".contains(&self.b[self.i]) {
+                while self.i < self.b.len() && !self.b[self.i].is_ascii_whitespace() && !DELIMITERS.contains(&self.b[self.i]) {
                     self.i += 1;
                 }
                 let tok = std::str::from_utf8(&self.b[start..self.i]).unwrap_or("");
@@ -144,7 +147,7 @@ impl P<'_> {
     fn name(&mut self) -> String {
         self.i += 1; // '/'
         let start = self.i;
-        while self.i < self.b.len() && !self.b[self.i].is_ascii_whitespace() && !b"[]<>/(".contains(&self.b[self.i]) {
+        while self.i < self.b.len() && !self.b[self.i].is_ascii_whitespace() && !DELIMITERS.contains(&self.b[self.i]) {
             self.i += 1;
         }
         String::from_utf8_lossy(&self.b[start..self.i]).into_owned()
