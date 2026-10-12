@@ -281,7 +281,7 @@ fn pixels_match_the_one_buffer_per_channel_reference() {
 }
 
 /// A copy of `bytes` with a different size, depth and merged-image section (`comp`, then `body`).
-fn with_merged(bytes: &[u8], size: Option<(u32, u32)>, depth: Option<u16>, comp: u16, body: &[u8]) -> Vec<u8> {
+pub(crate) fn with_merged(bytes: &[u8], size: Option<(u32, u32)>, depth: Option<u16>, comp: u16, body: &[u8]) -> Vec<u8> {
     let offset = Psd::parse(bytes.to_vec()).unwrap().merged_offset;
     let mut v = bytes[..offset].to_vec();
     if let Some((w, h)) = size {

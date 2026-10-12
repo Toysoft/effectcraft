@@ -1494,6 +1494,8 @@ mod memory_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_integration;
+#[cfg(test)]
 mod tests_opt;
 
 /// Test-only call counters (per thread), to prove what the optimised paths avoid doing.
