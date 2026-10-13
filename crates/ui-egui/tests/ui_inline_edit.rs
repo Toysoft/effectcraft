@@ -790,3 +790,58 @@ fn scrolled_expression_editor_is_clipped_to_rows_rect() {
         assert!(s.clip_rect.min.y >= ruler_bottom - 2.0, "expression text clip_rect.min.y {} overlaps ruler bottom {}", s.clip_rect.min.y, ruler_bottom);
     }
 }
+
+#[test]
+fn scrolling_at_bottom_of_expression_editor_bubbles_to_timeline_layers() {
+    let (mut h, _) = harness();
+    let (layer, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        for i in 1..=15 {
+            s.execute("layer.newSolid", json!({"name": format!("BG {i}"), "color": "#202020"})).unwrap();
+        }
+        let l = s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        let expr = (1..=20).map(|i| format!("// line {i}")).collect::<Vec<_>>().join("\n");
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": expr})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+
+    let expr_id = format!("timeline.prop.{opacity}.expression");
+    let expr_pos = center(&h, &expr_id);
+    let initial_scroll = h.state().ui.timeline.scroll_y;
+
+    // Scroll a small step downwards: editor still has lines below, so timeline must NOT scroll.
+    h.input_mut().events.push(Event::PointerMoved(expr_pos));
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -30.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(2);
+    assert_eq!(h.state().ui.timeline.scroll_y, initial_scroll, "timeline layers should not scroll while editor has lines below");
+
+    // Scroll several large steps to reach the bottom of the expression code.
+    for _ in 0..6 {
+        h.input_mut().events.push(Event::PointerMoved(expr_pos));
+        h.input_mut().events.push(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -100.0),
+            modifiers: Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.step();
+    }
+    h.run_steps(2);
+
+    // Timeline layers scroll position must have advanced because the editor ran out of lines below!
+    assert!(
+        h.state().ui.timeline.scroll_y > initial_scroll,
+        "timeline scroll_y {} should have scrolled past initial {}",
+        h.state().ui.timeline.scroll_y,
+        initial_scroll
+    );
+}

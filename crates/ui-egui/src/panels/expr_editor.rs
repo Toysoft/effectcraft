@@ -347,6 +347,14 @@ pub fn editor(ui: &mut egui::Ui, id: egui::Id, buf: &mut String, rect: Rect, p: 
                 .show(ui)
         });
     let out = scroll_out.inner;
+    let max_scroll_x = (scroll_out.content_size.x - er.width()).max(0.0);
+    let max_scroll_y = (scroll_out.content_size.y - er.height()).max(0.0);
+    let offset = scroll_out.state.offset;
+    let can_scroll_up = offset.y > 0.5;
+    let can_scroll_down = offset.y < max_scroll_y - 0.5;
+    let can_scroll_left = offset.x > 0.5;
+    let can_scroll_right = offset.x < max_scroll_x - 0.5;
+    ui.ctx().data_mut(|d| d.insert_temp(id.with("scroll_bounds"), (can_scroll_up, can_scroll_down, can_scroll_left, can_scroll_right)));
     if let Some(c) = accepted {
         let mut st = out.state.clone();
         st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(c))));

@@ -1693,33 +1693,61 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         } else {
             let ptr = ui.input(|i| i.pointer.hover_pos());
             let over_outline = ptr.is_some_and(|p| p.x < graph_x0);
-            let over_expr_editor = ptr.is_some_and(|p| {
-                if p.x < graph_x0 || !rows_rect.contains(p) {
-                    return false;
-                }
-                let mut yy = rows_rect.min.y - app.ui.timeline.scroll_y;
-                for row in &rows {
-                    let hh = row_height(row, rh);
-                    if let RowKind::Expr { uid, lines } = row.kind
-                        && p.y >= yy
-                        && p.y < yy + hh
-                    {
-                        let has_more_lines =
-                            comp.layer(row.layer).and_then(|l| l.props.find(uid)).and_then(|p| p.expr.as_ref()).is_some_and(|e| e.text.lines().count() > lines);
-                        return has_more_lines;
+            let (over_expr_x, over_expr_y) = ptr
+                .and_then(|p| {
+                    if p.x < graph_x0 || !rows_rect.contains(p) {
+                        return None;
                     }
-                    yy += hh;
-                }
-                false
-            });
+                    let mut yy = rows_rect.min.y - app.ui.timeline.scroll_y;
+                    for row in &rows {
+                        let hh = row_height(row, rh);
+                        if let RowKind::Expr { uid, lines } = row.kind
+                            && p.y >= yy
+                            && p.y < yy + hh
+                        {
+                            let bounds = ctx.data(|d| d.get_temp::<(bool, bool, bool, bool)>(egui::Id::new(("expr-edit", uid)).with("scroll_bounds")));
+                            let (cap_x, cap_y) = match bounds {
+                                Some((can_up, can_down, can_left, can_right)) => {
+                                    let cap_y = if dy < 0.0 {
+                                        can_down
+                                    } else if dy > 0.0 {
+                                        can_up
+                                    } else {
+                                        false
+                                    };
+                                    let cap_x = if dx < 0.0 {
+                                        can_right
+                                    } else if dx > 0.0 {
+                                        can_left
+                                    } else {
+                                        false
+                                    };
+                                    (cap_x, cap_y)
+                                }
+                                None => {
+                                    let has_more_lines = comp
+                                        .layer(row.layer)
+                                        .and_then(|l| l.props.find(uid))
+                                        .and_then(|p| p.expr.as_ref())
+                                        .is_some_and(|e| e.text.lines().count() > lines);
+                                    (false, has_more_lines && dy < 0.0)
+                                }
+                            };
+                            return Some((cap_x, cap_y));
+                        }
+                        yy += hh;
+                    }
+                    None
+                })
+                .unwrap_or((false, false));
             let shift = ui.input(|i| i.modifiers.shift);
             if over_outline && overflow > 0.0 && (dx.abs() > 0.0 || (shift && dy.abs() > 0.0)) {
                 let d = if dx.abs() > 0.0 { dx } else { dy };
                 app.ui.timeline.outline_scroll = (app.ui.timeline.outline_scroll - d).clamp(0.0, overflow);
-            } else if !over_expr_editor {
+            } else if !over_expr_y {
                 app.ui.timeline.scroll_y = (app.ui.timeline.scroll_y - dy).clamp(0.0, max_scroll);
             }
-            if dx.abs() > 0.0 && app.ui.timeline.pps.is_some() && !over_outline && !over_expr_editor {
+            if dx.abs() > 0.0 && app.ui.timeline.pps.is_some() && !over_outline && !over_expr_x {
                 app.ui.timeline.start = (app.ui.timeline.start - dx as f64 / pps).max(0.0);
             }
         }
