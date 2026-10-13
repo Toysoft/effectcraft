@@ -179,9 +179,11 @@ fn main() -> eframe::Result {
                 if plugins.is_dir() {
                     let _ = session.execute("effect.plugins.load", json!({"folder": plugins.to_string_lossy()}));
                 }
-                // External effect helpers (helpers/ next to the app or in the settings folder,
-                // EFFECTCRAFT_HELPER_PATH) add their effects too; EFFECTCRAFT_NO_HELPERS=1 skips them.
-                if session.helpers.is_some() && std::env::var_os("EFFECTCRAFT_NO_HELPERS").is_none_or(|v| v != "1") {
+                // External effect helpers are native programs, so they start at launch only when
+                // the user opts in with EFFECTCRAFT_HELPERS=1 (outside the settings folder, so
+                // writing there alone can't run code at launch). Otherwise Effect ▸ Scan for
+                // Effect Helpers starts them.
+                if session.helpers.is_some() && std::env::var_os("EFFECTCRAFT_HELPERS").is_some_and(|v| v == "1") {
                     match session.execute("effect.helpers.scan", json!({})) {
                         Ok(r) => {
                             for e in r["errors"].as_array().into_iter().flatten() {
