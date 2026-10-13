@@ -412,6 +412,33 @@ impl Deferred {
     }
 }
 
+/// #1249: a setting changed while the analysis runs in a worker survives its result, which
+/// used to replace the whole effect with the copy the job started from.
+#[test]
+fn an_edit_made_during_an_offloaded_analysis_survives_its_result() {
+    let (mut s, clip, solid) = setup(shaky);
+    s.execute("edit.clear", json!({"layers": [solid.0]})).unwrap();
+    s.execute("layer.select", json!({"layers": [clip.0]})).unwrap();
+    s.execute("effect.apply", json!({"effect": "Warp Stabilizer"})).unwrap();
+    set_param(&mut s, clip, "stabilization/smoothness", json!(37.5));
+    let off = std::sync::Arc::new(Deferred::default());
+    s.offload = Some(off.clone());
+    s.execute_checked("warp.analyze", json!({"layer": clip.0})).unwrap();
+    // While the job runs: another setting of the same effect.
+    set_param(&mut s, clip, "stabilization/smoothness", json!(12.5));
+    let fx = |s: &Session| s.active_comp().unwrap().layer(clip).unwrap().props.prop("effects/#1/stabilization/smoothness").unwrap().value.clone();
+    off.run(s.footage.clone());
+    assert!(s.poll_offload());
+    assert!(!s.drain_events().iter().any(|e| matches!(e, crate::Event::Toast { error: true, .. })), "applied without a conflict");
+    let st = s.execute("warp.status", json!({})).unwrap();
+    assert_eq!(st["analyzed"], true, "the analysis landed: {st}");
+    assert_eq!(fx(&s), KV::Scalar(12.5), "the edit made during the analysis stays");
+    // One undo step takes the analysis back and keeps the edit.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(fx(&s), KV::Scalar(12.5));
+    assert_eq!(s.execute("warp.status", json!({})).unwrap()["analyzed"], false);
+}
+
 /// M13.32: where jobs run elsewhere (the browser), `warp.status` never solves the
 /// stabilization plan on the page's thread (seconds for a long Subspace Warp clip): the
 /// analysis job sends the plan's summary with its result, and a settings change has the plan
