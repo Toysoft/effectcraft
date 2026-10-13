@@ -16,6 +16,7 @@ mod header;
 mod keys;
 mod masks;
 mod read;
+mod textdoc;
 mod typed;
 mod values;
 mod write;
@@ -28,6 +29,7 @@ pub use header::{BlendMode, CompHeader, LayerHeader, LayerType, Quality, Rationa
 pub use keys::{ExpressionFlags, Interpolation, KeyframeKind, SpatialKey};
 pub use masks::{Mask, MaskMode, PathVertex, ShapePath};
 pub use read::{Limits, parse, parse_with_limits};
+pub use textdoc::{Marker, TextDocument, TextValue, parse_text_dict};
 pub use typed::{Comp, Item, ItemKind, KeyList, Keyframe, Layer, ListHeader, Project, PropEntry, PropGroup, PropNode, Property, TimeBase};
 pub use values::{Tracked, Transform, ValueSource};
 pub use write::{write, write_to};
