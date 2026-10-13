@@ -148,8 +148,11 @@ fn new_comp(h: &CompHeader, renderer: Option<AepRenderer>, map: &TimeMap) -> Com
     comp.background = h.background.map(|c| f32::from(c) / 255.0);
     comp.pixel_aspect = h.pixel_aspect.to_f64().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
     comp.shutter_angle = f64::from(h.shutter_angle);
-    // After Effects centres the shutter on the frame by default.
-    comp.shutter_phase = -comp.shutter_angle / 2.0;
+    // The stored phase; a header without one centres the shutter on the frame.
+    comp.shutter_phase = h.shutter_phase.map_or(-comp.shutter_angle / 2.0, f64::from);
+    if let Some(start) = h.display_start.filter(|r| r.num >= 0 && r.den > 0) {
+        comp.display_start = map.ticks(start.num, start.den);
+    }
     comp.enable_motion_blur = h.motion_blur;
     if renderer.is_some_and(|r| r.match_name == "ADBE Calder") {
         comp.renderer = effectcraft_project::Renderer::Advanced3D;
@@ -231,9 +234,9 @@ fn blend(mode: AepBlend) -> Option<BlendMode> {
 
 /// `start + offset * stretch` of two stored times, exact and unreduced when they share a
 /// denominator (so frames stay frames), reduced otherwise.
-fn absolute(start: Rational, offset: Rational, stretch: u32, reduced: Option<Rational>) -> Option<(i64, i64)> {
-    if start.den == offset.den && start.den != 0 {
-        let num = i128::from(start.num).checked_add(i128::from(offset.num).checked_mul(i128::from(stretch))?)?;
+fn absolute(start: Rational, offset: Rational, stretch: Rational, reduced: Option<Rational>) -> Option<(i64, i64)> {
+    if start.den == offset.den && start.den != 0 && stretch.den == 1 {
+        let num = i128::from(start.num).checked_add(i128::from(offset.num).checked_mul(i128::from(stretch.num))?)?;
         return Some((i64::try_from(num).ok()?, start.den));
     }
     reduced.map(|r| (r.num, r.den))
@@ -365,8 +368,9 @@ fn would_loop(uses: &HashMap<ItemId, Vec<ItemId>>, from: ItemId, to: ItemId) -> 
 }
 
 fn apply_timing(l: &mut Layer, h: &LayerHeader, tm: &TimeMap) {
-    let stretch = if h.stretch == 0 { 1 } else { h.stretch };
-    l.stretch = f64::from(stretch) * 100.0;
+    // The exact ratio `stretch / stretch_den` (50 % is 1/2); a zero or unreadable one is 100 %.
+    let stretch = h.stretch_ratio().filter(|r| r.num != 0).unwrap_or(Rational { num: 1, den: 1 });
+    l.stretch = stretch.to_f64().map_or(100.0, |r| r * 100.0);
     l.start_time = tm.ticks(h.start.num, h.start.den);
     let abs = |offset: Rational, reduced: Option<Rational>| absolute(h.start, offset, stretch, reduced).map_or(Tick::ZERO, |(n, d)| tm.ticks(n, d));
     l.in_point = abs(h.in_relative, h.in_point());

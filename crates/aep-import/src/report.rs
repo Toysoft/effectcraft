@@ -171,6 +171,6 @@ impl Collector {
 /// Parts of a project that the container reader does not decode. They are never imported and, as
 /// the reader cannot see them, never counted either.
 pub const LIMITATIONS: &[&str] = &[
-    "Track mattes, frame blending, layer styles, 3D material options, audio levels, guides and the composition start time are not decoded and not imported.",
+    "Track mattes, frame blending, layer styles, 3D material options, audio levels, guides are not decoded and not imported.",
     "Footage that is not a solid is linked by its stored path; its duration and frame rate are not decoded (use Reload Footage after the files are found).",
 ];

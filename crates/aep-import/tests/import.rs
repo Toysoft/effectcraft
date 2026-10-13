@@ -135,7 +135,8 @@ fn composition_settings() {
         ("033-comp-bg-green.aep", &|c| assert_ne!(c.background, [0.0, 0.0, 0.0])),
         ("034-comp-shutter90.aep", &|c| {
             assert_eq!(c.shutter_angle, 90.0);
-            assert_eq!(c.shutter_phase, -45.0);
+            // The stored phase (0 in this file), not an assumed centring.
+            assert_eq!(c.shutter_phase, 0.0);
         }),
         ("035-comp-workarea-1-2.aep", &|c| assert_eq!(c.work_area, (Tick(SEC), Tick(3 * SEC)))),
         ("037-comp-pixelaspect2.aep", &|c| assert_eq!(c.pixel_aspect, 2.0)),
@@ -532,4 +533,82 @@ fn files_that_are_not_projects_are_errors() {
         assert!(effectcraft_aep_import::import(&mut p, bytes, &opts).is_err());
     }
     assert!(p.items.is_empty());
+}
+
+#[test]
+fn time_stretch_is_the_exact_ratio() {
+    // 316: 50 %, the stored out point 5 s becomes 2.5 s.
+    let (p, r) = load("316-layer-stretch50.aep");
+    let l = only_layer(&p, &r);
+    assert_eq!((l.stretch, l.start_time, l.in_point, l.out_point), (50.0, Tick::ZERO, Tick::ZERO, secs(2.5)));
+    // 317: 150 %, ends at 7.5 s.
+    let (p, r) = load("317-layer-stretch150.aep");
+    let l = only_layer(&p, &r);
+    assert_eq!((l.stretch, l.in_point, l.out_point), (150.0, Tick::ZERO, secs(7.5)));
+}
+
+#[test]
+fn fractional_in_point_is_exact() {
+    // 318: in point 8532/25600 s, out 136532/25600 s.
+    let (p, r) = load("318-layer-inpoint-0.3333.aep");
+    let l = only_layer(&p, &r);
+    assert_eq!(l.stretch, 100.0);
+    assert_eq!(l.in_point, Tick(8532 * (SEC / 25600)));
+    assert_eq!(l.out_point, Tick(136532 * (SEC / 25600)));
+    assert_eq!(l.start_time, Tick::ZERO);
+}
+
+#[test]
+fn composition_pixel_aspect_shutter_phase_and_display_start() {
+    let (p, r) = load("325-comp-pixelaspect-0.9091.aep");
+    close(comp(&p, &r, "C").1.pixel_aspect, 10.0 / 11.0);
+    let (p, r) = load("326-comp-shutterphase-m90.aep");
+    let c = comp(&p, &r, "C").1;
+    assert_eq!((c.shutter_angle, c.shutter_phase), (180.0, -90.0));
+    let (p, r) = load("327-comp-displaystartframe-100.aep");
+    let c = comp(&p, &r, "C").1;
+    assert_eq!((c.display_start, c.shutter_phase), (Tick(4 * SEC), 0.0));
+    let (p, r) = load("000-base.aep");
+    assert_eq!(comp(&p, &r, "C").1.display_start, Tick::ZERO);
+}
+
+#[test]
+fn ntsc_fixtures_import_as_exact_rates() {
+    let (p, r) = load("229-comp-fps-29.97.aep");
+    assert_eq!(comp(&p, &r, "C").1.frame_rate, FrameRate::FPS_29_97);
+    let (p, r) = load("230-comp-fps-23.976.aep");
+    assert_eq!(comp(&p, &r, "C").1.frame_rate, FrameRate::FPS_23_976);
+}
+
+#[test]
+fn scale_bezier_ease_is_imported_per_dimension() {
+    // 305: key 1 in 0 / 33 %, out 0.2 / 66 %; key 2 in 0.1 / 66 %, out 0 / 33 % in every
+    // dimension. Speeds are fractions per second, here percent.
+    let (p, r) = load("305-key-scale-bezier-ease.aep");
+    let s = only_layer(&p, &r).props.prop("transform/scale").unwrap().clone();
+    assert_eq!(s.keys.len(), 2);
+    for k in &s.keys {
+        assert_eq!((k.in_interp, k.out_interp), (Interp::Bezier, Interp::Bezier));
+    }
+    assert_eq!(s.keys[0].value, Value::Vec3([100.0, 100.0, 100.0]));
+    assert_eq!(s.keys[1].value, Value::Vec3([200.0, 150.0, 100.0]));
+    assert_eq!(s.keys[1].time, Tick(2 * SEC));
+    assert!(s.keys[0].in_ease.is_empty() && s.keys[1].out_ease.is_empty());
+    assert_eq!(s.keys[0].out_ease.len(), 3);
+    for e in &s.keys[0].out_ease {
+        close(e.speed, 20.0);
+        close(e.influence, 0.66);
+    }
+    assert_eq!(s.keys[1].in_ease.len(), 3);
+    for e in &s.keys[1].in_ease {
+        close(e.speed, 10.0);
+        close(e.influence, 0.66);
+    }
+    assert_eq!(loss(&r.report, LossCategory::ApproximatedKeyframes), 0);
+}
+
+#[test]
+fn time_remap_is_still_reported() {
+    let (_, r) = load("319-precomp-timeremap.aep");
+    assert_eq!(loss(&r.report, LossCategory::TimeRemapping), 1);
 }

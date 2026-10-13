@@ -163,18 +163,20 @@ fn key_eases(key: &AepKey<'_>, kind: Kind) -> Option<(Vec<Ease>, Vec<Ease>)> {
             Some((vec![ease(e.in_speed, e.in_influence, f)?], vec![ease(e.out_speed, e.out_influence, f)?]))
         }
         KeyframeKind::Plain { components } => {
-            // Four values per component. Their order is not decided by the sample files
-            // (component-major is the likely one), so they are used only when every component
-            // carries the same four numbers, which both orders read the same way.
-            let slots = key.plain_ease_slots()?;
-            let (chunks, rest) = slots.as_chunks::<4>();
-            let first = chunks.first()?;
-            if !rest.is_empty() || chunks.len() != components || chunks.iter().any(|c| c != first) {
+            // One ease per dimension (the stored slots are type-major, see
+            // `Keyframe::ease_component`), so Scale keys with a different ease in each
+            // dimension stay bezier.
+            let all = key.ease_components()?;
+            if all.len() != components {
                 return None;
             }
-            let in_e = ease(*first.first()?, *first.get(1)?, f)?;
-            let out_e = ease(*first.get(2)?, *first.get(3)?, f)?;
-            Some((vec![in_e; components], vec![out_e; components]))
+            let mut in_e = Vec::with_capacity(components);
+            let mut out_e = Vec::with_capacity(components);
+            for e in &all {
+                in_e.push(ease(e.in_speed, e.in_influence, f)?);
+                out_e.push(ease(e.out_speed, e.out_influence, f)?);
+            }
+            Some((in_e, out_e))
         }
         _ => None,
     }

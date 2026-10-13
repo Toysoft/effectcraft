@@ -44,9 +44,9 @@ refused losses) leaves the project unchanged.
 | Area | Imported |
 |---|---|
 | Project tree | Folders (nesting and order), compositions, solids (colour, size), footage items; item labels |
-| Composition | name, size, exact frame rate, duration, work area, background colour (8 bit), pixel aspect, composition motion blur switch, shutter angle (phase −angle/2), Classic/Advanced 3D renderer |
-| Layers | solid, null, adjustment, footage and precomposition layers: name (the source's name when the layer has none), in/out/start/stretch (exact), enabled/audio/solo/shy/locked/effects/motion blur/collapse/3D/guide switches, draft quality, label, blend mode (Normal, Multiply, Add, Screen, Overlay, Difference), parent |
-| Transform | Anchor Point, Position, Scale, Rotation, Opacity: the stored value, or the default when the file stores none; keyframes with time, linear/bezier/hold on each side, temporal ease (speed and influence), automatic or manual spatial tangents, roving and key labels |
+| Composition | name, size, exact frame rate, duration, work area, background colour (8 bit), pixel aspect, composition motion blur switch, shutter angle and phase (as stored), display start time, Classic/Advanced 3D renderer |
+| Layers | solid, null, adjustment, footage and precomposition layers: name (the source's name when the layer has none), in/out/start and time stretch (exact ratios, e.g. 50 % and 150 %), enabled/audio/solo/shy/locked/effects/motion blur/collapse/3D/guide switches, draft quality, label, blend mode (Normal, Multiply, Add, Screen, Overlay, Difference), parent |
+| Transform | Anchor Point, Position, Scale, Rotation, Opacity: the stored value, or the default when the file stores none; keyframes with time, linear/bezier/hold on each side, temporal ease (speed and influence, per dimension for Scale), automatic or manual spatial tangents, roving and key labels |
 | Expressions | on those five properties: source text and enable switch |
 | Footage | a link to the stored path; **missing-footage placeholder** when the path does not exist where the import runs (listed in `missingFootage`), a normal link when it does. The importer never opens footage |
 
@@ -61,7 +61,7 @@ Units, the "absent = default" rule and the keyframe templates are the reader's
   the nearest tick. The NTSC rates are stored as typed (`23976/800` is 29.97, `23976/1000` is
   23.976) and become the exact rates 30000/1001 and 24000/1001 (59.94 and 119.88 likewise); every
   other rate is kept as the stored fraction. A layer's in/out are `start + offset × stretch`,
-  computed on the stored denominators.
+  computed on the stored denominators with the exact stretch ratio.
 - **Position.** Absent means the composition centre at the time of the import. A composition that
   was resized without moving the layer stores the old centre, and so does the project.
 - **Spatial tangents.** The switch at byte 8 of a spatial key (1 normally, 0 after the tangents
@@ -85,16 +85,15 @@ Units, the "absent = default" rule and the keyframe templates are the reader's
 | `text_layers`, `shape_layers`, `cameras`, `lights` | each such layer (the layer is skipped; the other layers of the composition are imported) |
 | `blend_modes` | a blend mode outside the six above (the layer stays Normal) |
 | `transform_properties` | a stored transform property other than the five (X/Y rotation, orientation, separated position dimensions) |
-| `time_remapping` | a stored Time Remap |
-| `approximated_keyframes` | a key imported in a simpler form (unknown interpolation code, bezier ease that cannot be decoded: Scale/other multi-component keys unless all components share one ease, Anchor Point ease) |
+| `time_remapping` | an enabled Time Remap (decoded by the reader, but the project has no time remap yet) |
+| `approximated_keyframes` | a key imported in a simpler form (unknown interpolation code, bezier ease that cannot be decoded: Anchor Point ease or non-finite ease data) |
 | `parent_links` | a parent that was not imported (a skipped camera, a missing layer) or that forms a loop |
 | `unsupported_layers` | an unknown layer type, a layer without a usable source, a precomposition loop (the layer is cut) |
 | `unsupported_items` | a project item of an unknown kind |
 | `damaged_data` | a header, key or value that could not be read, numbers that are not finite or beyond ±1e9 (default used) |
 
 `limitations` states what the reader cannot see at all, so it can be neither imported nor counted:
-track mattes, frame blending, layer styles, 3D material options, audio levels, guides, the
-composition start time, and footage duration/frame rate. They are listed in every report.
+track mattes, frame blending, layer styles, 3D material options, audio levels, guides, and footage duration/frame rate. They are listed in every report.
 
 ## How fidelity is checked
 
