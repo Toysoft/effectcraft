@@ -9,6 +9,7 @@
 
 mod bytes;
 mod chunk;
+mod effects;
 mod error;
 mod footage;
 mod header;
@@ -19,6 +20,7 @@ mod values;
 mod write;
 
 pub use chunk::{AepFile, Body, Chunk, LIST, NESTED_IDS, Walk};
+pub use effects::{Effect, EffectParam, ParamKind, ParamValue};
 pub use error::AepError;
 pub use footage::Footage;
 pub use header::{BlendMode, CompHeader, LayerHeader, LayerType, Quality, Rational, Renderer};

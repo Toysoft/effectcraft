@@ -9,6 +9,13 @@
 use crate::bytes::{be_f64, be_u16, be_u32, text, until_nul};
 use crate::chunk::{AepFile, Chunk};
 
+/// The name a user gave a property or group: the `Utf8` inside its `tdsn` chunk. `None` for the
+/// sentinel `-_0_/-` ("no custom name") and for empty names.
+pub(crate) fn user_name(chunk: &Chunk<'_>) -> Option<String> {
+    let name = chunk.child(b"tdsn")?.children().iter().find(|c| c.is(b"Utf8"))?.bytes().map(text)?;
+    (!name.is_empty() && name != "-_0_/-").then_some(name)
+}
+
 /// The content of a `Utf8` child as text (not trimmed).
 pub(crate) fn utf8_child(chunk: &Chunk<'_>) -> Option<String> {
     chunk.child(b"Utf8").and_then(Chunk::bytes).map(text)
@@ -208,6 +215,11 @@ impl<'f, 'a> PropGroup<'f, 'a> {
         self.chunk
     }
 
+    /// The name the user gave the group (e.g. `Mask 1`, `Group 1`); `None` when it has none.
+    pub fn user_name(&self) -> Option<String> {
+        user_name(self.chunk)
+    }
+
     /// The group's flags (`tdsb`, a `u32`).
     pub fn flags(&self) -> Option<u32> {
         be_u32(self.chunk.child(b"tdsb")?.bytes()?, 0)
@@ -281,6 +293,11 @@ impl<'f, 'a> Property<'f, 'a> {
     /// The underlying chunk.
     pub fn chunk(&self) -> &'f Chunk<'a> {
         self.chunk
+    }
+
+    /// The name the user gave the property; `None` when it has none.
+    pub fn user_name(&self) -> Option<String> {
+        user_name(self.chunk)
     }
 
     /// The raw 124-byte `tdb4` header.
