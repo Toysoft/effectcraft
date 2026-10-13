@@ -4,10 +4,12 @@
 //! plug-in names remain verbatim; these catalogs only translate the fixed menu tree.
 
 use crate::EffectcraftApp;
+use std::sync::OnceLock;
 
 /// Effect names, keyed by effect id (#821).
 pub(crate) mod effects;
 /// Translations for the panels, tooltips and dialogs below the menu bar (see the module docs).
+mod bidi;
 mod ui;
 use effectcraft_engine::menus::{MenuEntry, MenuNode};
 pub(crate) use ui::{set_current, tr, tr_args};
@@ -135,7 +137,7 @@ pub(crate) fn label<'a>(app: &EffectcraftApp, command: &str, source: &'a str) ->
         "fr" => lookup(FRENCH, command, source),
         "de" => lookup(GERMAN, command, source),
         "cs" => lookup(CZECH, command, source),
-        "ar" => lookup(ARABIC, command, source),
+        "ar" => lookup(arabic_menus(), command, source),
         _ => source,
     }
 }
@@ -144,6 +146,14 @@ pub(crate) fn label<'a>(app: &EffectcraftApp, command: &str, source: &'a str) ->
 /// absent, so computed labels and user names stay verbatim.
 fn lookup<'a>(catalog: &[(&str, &str, &'a str)], command: &str, source: &'a str) -> &'a str {
     catalog.iter().find(|(id, en, _)| *id == command && *en == source).map(|(_, _, translated)| *translated).unwrap_or(source)
+}
+
+/// The Arabic menu rows in visual order (bidi), kept for the life of the process: the order egui
+/// draws a label's runs in, so the menus read right to left. Built once; the rows are `&'static`,
+/// so the reordered strings are too.
+fn arabic_menus() -> &'static [(&'static str, &'static str, &'static str)] {
+    static VISUAL: OnceLock<Vec<(&'static str, &'static str, &'static str)>> = OnceLock::new();
+    VISUAL.get_or_init(|| ARABIC.iter().map(|(id, en, translated)| (*id, *en, bidi::visual_static(translated))).collect())
 }
 
 pub(crate) fn entry(app: &EffectcraftApp, e: &MenuEntry, shown: String) -> String {
@@ -169,15 +179,18 @@ pub(crate) fn entry(app: &EffectcraftApp, e: &MenuEntry, shown: String) -> Strin
         "ar" => ("تراجع", "لا شيء للتراجع عنه", "إعادة", "لا شيء للإعادة"),
         _ => return shown,
     };
+    // Arabic's formatted labels are reordered into the visual order egui draws (bidi): the
+    // history or panel name lands at the reading end of the sentence.
+    let show = |out: String| if language(app) == "ar" { bidi::visual_rtl(&out) } else { out };
     match e.command.as_str() {
-        "edit.undo" => app.session.history.undo.last().map(|u| format!("{undo} {}", u.0)).unwrap_or_else(|| no_undo.into()),
-        "edit.redo" => app.session.history.redo.last().map(|u| format!("{redo} {}", u.0)).unwrap_or_else(|| no_redo.into()),
+        "edit.undo" => show(app.session.history.undo.last().map(|u| format!("{undo} {}", u.0)).unwrap_or_else(|| no_undo.into())),
+        "edit.redo" => show(app.session.history.redo.last().map(|u| format!("{redo} {}", u.0)).unwrap_or_else(|| no_redo.into())),
         "window.panel" => {
             let prefix = format!("{}: ", e.label);
             if let Some(name) = shown.strip_prefix(&prefix) {
-                format!("{}: {name}", label(app, &e.command, &e.label))
+                show(format!("{}: {name}", label(app, &e.command, &e.label)))
             } else {
-                label(app, &e.command, &shown).into()
+                show(label(app, &e.command, &shown).into())
             }
         }
         _ if shown == e.label => label(app, &e.command, &e.label).into(),
@@ -213,12 +226,12 @@ pub(crate) fn submenu(app: &EffectcraftApp, source: &str, shown: String) -> Stri
         "ar" => {
             if source == "Assign Shortcut to Workspace" {
                 if let Some(name) = shown.strip_prefix("Assign Shortcut to “").and_then(|s| s.strip_suffix("” Workspace")) {
-                    return format!("إسناد اختصار لمساحة العمل «{name}»");
+                    return bidi::visual_rtl(&format!("إسناد اختصار لمساحة العمل «{name}»"));
                 }
             } else if source == "Assign Shortcut to 3D View"
                 && let Some(name) = shown.strip_prefix("Assign Shortcut to “").and_then(|s| s.strip_suffix('”'))
             {
-                return format!("إسناد اختصار للعرض الثلاثي «{name}»");
+                return bidi::visual_rtl(&format!("إسناد اختصار للعرض الثلاثي «{name}»"));
             }
         }
         "uk" => {
@@ -7335,7 +7348,7 @@ mod tests {
         assert!(arabic(&app));
         assert_eq!(code("ar"), "ar");
         let ar = crate::native_menu::build(&app);
-        assert!(ar.items().iter().any(|i| i.command == "comp.new" && i.label == "تركيب جديد..."));
+        assert!(ar.items().iter().any(|i| i.command == "comp.new" && i.label == "...جديد تركيب")); // visual order (bidi)
         assert!(ar.items().iter().any(|i| i.command == "layer.newText" && i.label == "نص"));
         assert!(ar.items().iter().any(|i| i.command == "keys.easyEase" && i.label == "تنعيم"));
         for (source, translated) in [
@@ -7352,11 +7365,16 @@ mod tests {
             assert_eq!(label(&app, "", source), translated);
         }
         assert_eq!(label(&app, "unknown.command", "Text"), "Text");
-        assert_eq!(entry(&app, &MenuEntry { label: "Undo".into(), command: "edit.undo".into(), params: json!({}), shortcut: None }, "Can't Undo".into()), "لا شيء للتراجع عنه");
-        assert_eq!(entry(&app, &MenuEntry { label: "Redo".into(), command: "edit.redo".into(), params: json!({}), shortcut: None }, "Undo File".into()), "تراجع File");
-        assert_eq!(submenu(&app, "Assign Shortcut to Workspace", "Assign Shortcut to “Default” Workspace".into()), "إسناد اختصار لمساحة العمل «Default»");
-        assert_eq!(submenu(&app, "Assign Shortcut to 3D View", "Assign Shortcut to “Top”".into()), "إسناد اختصار للعرض الثلاثي «Top»");
-        assert_eq!(submenu(&app, "Assign Shortcut to Workspace", "Assign Shortcut to Workspace".into()), "إسناد اختصار لمساحة العمل");
+        assert_eq!(entry(&app, &MenuEntry { label: "Undo".into(), command: "edit.undo".into(), params: json!({}), shortcut: None, alt_shortcuts: vec![] }, "Can't Undo".into()), "عنه للتراجع شيء لا");
+        assert_eq!(entry(&app, &MenuEntry { label: "Redo".into(), command: "edit.redo".into(), params: json!({}), shortcut: None, alt_shortcuts: vec![] }, "Can't Redo".into()), "للإعادة شيء لا");
+        // the formatted labels: the history name lands at the reading end (bidi puts it there)
+        app.session.history.undo.push(("File".into(), app.session.project.clone()));
+        app.session.history.redo.push(("Text".into(), app.session.project.clone()));
+        assert_eq!(entry(&app, &MenuEntry { label: "Undo".into(), command: "edit.undo".into(), params: json!({}), shortcut: None, alt_shortcuts: vec![] }, "Undo File".into()), "File تراجع");
+        assert_eq!(entry(&app, &MenuEntry { label: "Redo".into(), command: "edit.redo".into(), params: json!({}), shortcut: None, alt_shortcuts: vec![] }, "Redo Text".into()), "Text إعادة");
+        assert_eq!(submenu(&app, "Assign Shortcut to Workspace", "Assign Shortcut to “Default” Workspace".into()), "»Default« العمل لمساحة اختصار إسناد"); // visual order (bidi)
+        assert_eq!(submenu(&app, "Assign Shortcut to 3D View", "Assign Shortcut to “Top”".into()), "»Top« الثلاثي للعرض اختصار إسناد");
+        assert_eq!(submenu(&app, "Assign Shortcut to Workspace", "Assign Shortcut to Workspace".into()), "العمل لمساحة اختصار إسناد");
         app.session.execute("prefs.set", json!({"key": "general.language", "value": "en"})).unwrap();
     }
 

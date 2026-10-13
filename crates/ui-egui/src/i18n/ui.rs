@@ -59,7 +59,13 @@ fn catalog(language: &str) -> Option<&'static Index> {
         "ar" => (&AR, ARABIC),
         _ => return None,
     };
-    Some(index.get_or_init(|| rows.iter().copied().collect()))
+    // Arabic's rows are stored in visual order (bidi): the order egui draws a label's runs in,
+    // so the panels read right to left. The strings are `&'static str`, so the reordered ones
+    // are kept for the life of the process.
+    Some(match language {
+        "ar" => index.get_or_init(|| rows.iter().map(|(source, translated)| (*source, super::bidi::visual_static(translated))).collect()),
+        _ => index.get_or_init(|| rows.iter().copied().collect()),
+    })
 }
 
 /// Translate one interface string: the current language's row for `text`, or `text` itself.
@@ -4859,7 +4865,7 @@ mod tests {
     #[test]
     fn arabic_panels_translate_and_keep_project_content() {
         set_current("ar");
-        assert_eq!(tr("Composition Name:"), "اسم التركيب:");
+        assert_eq!(tr("Composition Name:"), ":التركيب اسم"); // visual order (bidi)
         assert_eq!(tr("Cancel"), "إلغاء");
         assert_eq!(tr("my layer.mp4"), "my layer.mp4");
         assert_eq!(tr_args("Proxy Use: {}", &[&"Best"]), "استخدام البديل: Best");
