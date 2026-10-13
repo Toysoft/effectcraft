@@ -28,6 +28,6 @@ panics. Which fields are verified, which are not decoded, and how it was found i
 ## Clean room
 
 Everything here comes from our own observations: project files that we generated ourselves with
-After Effects, one change per file, compared byte by byte. No third-party parser, specification
-or source was read, and no Adobe asset is used. The test fixtures in `tests/fixtures/` are such
+After Effects, one change per file, compared byte by byte. No source code, specification or
+format documentation of another reader was used, and no Adobe asset is used. The test fixtures in `tests/fixtures/` are such
 generated files (own test data, attributed in `ATTRIBUTION.md`).
