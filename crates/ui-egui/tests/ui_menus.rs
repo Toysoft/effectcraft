@@ -317,3 +317,18 @@ fn a_disabled_title_does_not_switch_menus() {
     hover(&mut h, edit.center());
     assert!(!shown(&h, "Keyboard Shortcuts"), "Edit didn't open");
 }
+
+/// Leaving the window keeps the menu open, and coming back in over another title switches to it
+/// (egui reports no pointer movement for that first position).
+#[test]
+fn pointer_reentering_over_another_title_switches_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    h.input_mut().events.push(Event::PointerGone);
+    h.run_steps(2);
+    assert!(shown(&h, "Open Project"), "leaving the window kept File open");
+    hover(&mut h, edit.center());
+    assert!(shown(&h, "Keyboard Shortcuts"), "coming back over Edit opened it");
+    assert!(!shown(&h, "Open Project"), "and closed File");
+}
