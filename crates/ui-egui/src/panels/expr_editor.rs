@@ -316,8 +316,9 @@ pub fn editor(ui: &mut egui::Ui, id: egui::Id, buf: &mut String, rect: Rect, p: 
         let job = layout(text.as_str(), font.clone(), color, &sx, &pc, brackets, wrap);
         ui.fonts_mut(|f| f.layout_job(job))
     };
+    let clip = ui.clip_rect().intersect(er);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(er));
-    child.set_clip_rect(er);
+    child.set_clip_rect(clip);
     // Auto-complete: Tab accepts the first candidate (consumed before the editor sees it).
     let mut accepted = None;
     if p.auto_complete
@@ -358,16 +359,16 @@ pub fn editor(ui: &mut egui::Ui, id: egui::Id, buf: &mut String, rect: Rect, p: 
         let speed = |dist: f32| (dist * 0.6).clamp(3.0, 35.0);
         let mut scroll_delta = egui::Vec2::ZERO;
 
-        if ptr.y > er.max.y - edge_margin {
-            scroll_delta.y += speed(ptr.y - (er.max.y - edge_margin));
-        } else if ptr.y < er.min.y + edge_margin {
-            scroll_delta.y -= speed((er.min.y + edge_margin) - ptr.y);
+        if ptr.y > clip.max.y - edge_margin {
+            scroll_delta.y += speed(ptr.y - (clip.max.y - edge_margin));
+        } else if ptr.y < clip.min.y + edge_margin {
+            scroll_delta.y -= speed((clip.min.y + edge_margin) - ptr.y);
         }
 
-        if ptr.x > er.max.x - edge_margin {
-            scroll_delta.x += speed(ptr.x - (er.max.x - edge_margin));
-        } else if ptr.x < er.min.x + edge_margin {
-            scroll_delta.x -= speed((er.min.x + edge_margin) - ptr.x);
+        if ptr.x > clip.max.x - edge_margin {
+            scroll_delta.x += speed(ptr.x - (clip.max.x - edge_margin));
+        } else if ptr.x < clip.min.x + edge_margin {
+            scroll_delta.x -= speed((clip.min.x + edge_margin) - ptr.x);
         }
 
         if scroll_delta != egui::Vec2::ZERO {
@@ -393,7 +394,8 @@ pub fn editor(ui: &mut egui::Ui, id: egui::Id, buf: &mut String, rect: Rect, p: 
             }
         }
     }
-    let painter = ui.painter().with_clip_rect(rect);
+    let clip_r = ui.clip_rect().intersect(rect);
+    let painter = ui.painter().with_clip_rect(clip_r);
     if p.line_numbers {
         painter.rect_filled(Rect::from_min_max(rect.min, pos2(rect.min.x + gutter - 3.0, rect.max.y)), 0.0, t.expr_bg);
         let g = out.galley.clone();
@@ -402,7 +404,7 @@ pub fn editor(ui: &mut egui::Ui, id: egui::Id, buf: &mut String, rect: Rect, p: 
         for row in &g.rows {
             if new_line {
                 let y = out.galley_pos.y + row.rect().center().y;
-                if y >= rect.min.y - 2.0 && y <= rect.max.y + 2.0 {
+                if y >= clip_r.min.y - 2.0 && y <= clip_r.max.y + 2.0 {
                     painter.text(pos2(rect.min.x + gutter - 6.0, y), egui::Align2::RIGHT_CENTER, line.to_string(), Tokens::mono(size * 0.85), t.text_faint);
                 }
                 line += 1;

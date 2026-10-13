@@ -749,3 +749,44 @@ fn drag_selecting_outside_expression_editor_scrolls_and_expands_selection() {
     let range = st.cursor.char_range().expect("text selection range exists");
     assert!(range.primary.index.0 > 80, "selection primary index {} should have scrolled past initial lines", range.primary.index.0);
 }
+
+#[test]
+fn scrolled_expression_editor_is_clipped_to_rows_rect() {
+    let (mut h, _) = harness();
+    let (layer, _opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        for i in 1..=15 {
+            s.execute("layer.newSolid", json!({"name": format!("BG {i}"), "color": "#202020"})).unwrap();
+        }
+        let l = s.execute("layer.newSolid", json!({"name": "Solid", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        let expr = (1..=20).map(|i| format!("// line {i}")).collect::<Vec<_>>().join("\n");
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": expr})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+
+    let ruler_rect = h.state().auto.find("timeline.ruler").expect("ruler exists").rect;
+    let ruler_bottom = ruler_rect[1] + ruler_rect[3];
+
+    // Scroll timeline down so that the expression editor row partially scrolls up past the top of the rows rect.
+    h.state_mut().ui.timeline.scroll_y = 170.0;
+    h.run_steps(3);
+
+    // Any shapes rendering expression editor text must NOT have a clip_rect extending above the rows rect / ruler bottom.
+    let expr_shapes: Vec<_> = h
+        .output()
+        .shapes
+        .iter()
+        .filter(|s| match &s.shape {
+            egui::Shape::Text(t) => t.galley.text().contains("line 1"),
+            _ => false,
+        })
+        .collect();
+    assert!(!expr_shapes.is_empty(), "expression text should be rendered");
+    for s in expr_shapes {
+        assert!(s.clip_rect.min.y >= ruler_bottom - 2.0, "expression text clip_rect.min.y {} overlaps ruler bottom {}", s.clip_rect.min.y, ruler_bottom);
+    }
+}
