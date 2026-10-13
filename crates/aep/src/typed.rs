@@ -1,8 +1,9 @@
 //! A small typed view over the chunk tree: project items, compositions, layers, the property
-//! tree and keyframe lists.
+//! tree and keyframe lists. The field decoders for headers, values, keyframes, effects, masks, text,
+//! markers and footage are in the sibling modules and extend these types.
 //!
 //! Only facts that were established from our own one-change-per-file corpus and are checked by
-//! tests against it are decoded here (see `docs/aep-format.md` for the evidence). Everything else
+//! tests against it are decoded (see `docs/aep-format.md` for the evidence). Everything else
 //! stays reachable through the raw [`Chunk`] tree. Views borrow the file and never fail loudly:
 //! a chunk that does not have the expected shape yields `None` or is skipped.
 

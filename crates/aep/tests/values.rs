@@ -243,5 +243,9 @@ fn expression_text_and_flag_bytes() {
         let flags = p.expression_flags().unwrap();
         assert_eq!((flags.byte_76, flags.byte_77, flags.byte_120), (0, 0, 0));
         assert!(!flags.all_set());
+        // A written static property: tdsb 1, byte 5 of tdb4 has bit 0 set (15 for Position).
+        assert_eq!(p.flags(), Some(1));
+        assert_eq!(p.is_static_flag_set(), Some(true));
+        assert_eq!(p.header().and_then(|h| h.get(5).copied()), Some(15));
     });
 }

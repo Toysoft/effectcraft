@@ -4,7 +4,7 @@
 mod common;
 
 use common::{first_comp, fixture, layer_with_id, open};
-use effectcraft_aep::{Mask, MaskMode, PathVertex, Project, ShapePath, ValueSource};
+use effectcraft_aep::{KeyframeKind, Mask, MaskMode, PathVertex, Project, PropNode, Property, ShapePath, ValueSource};
 
 const L: u32 = 0x1b;
 const SIZE: (f64, f64) = (1920.0, 1080.0);
@@ -83,6 +83,18 @@ fn animated_mask_path_has_one_shape_per_key() {
     let m = &m[0];
     assert!(m.path_animated);
     assert_eq!(m.path_key_seconds, [0.0, 1.0]);
+    // The path property keeps its keys in a list of 64-byte records (the shapes are in `shap`).
+    let bytes = fixture("093-mask-path-2keys.aep");
+    let file = open(&bytes);
+    let project = Project::new(&file).unwrap();
+    let layer = layer_with_id(&first_comp(&project), L);
+    let Some(PropNode::Group(parade)) = layer.properties().unwrap().get("ADBE Mask Parade") else { panic!("mask parade") };
+    let Some(PropNode::Group(atom)) = parade.get("ADBE Mask Atom") else { panic!("mask atom") };
+    let Some(PropNode::Other(path)) = atom.get("ADBE Mask Shape") else { panic!("mask shape") };
+    let prop = Property::from_chunk(path.child_list(b"tdbs").unwrap()).unwrap();
+    let list = prop.keys().unwrap();
+    assert_eq!((list.len(), list.header.record_size), (2, 64));
+    assert!(list.keyframes().all(|k| k.kind() == KeyframeKind::MaskPath));
     assert_eq!(m.shapes.len(), 2);
     assert_points(&m.shapes[0].vertices(SIZE), &[[760.0, 440.0], [1160.0, 440.0], [1160.0, 640.0], [760.0, 640.0]]);
     assert_points(&m.shapes[1].vertices(SIZE), &[[560.0, 340.0], [1360.0, 340.0], [1360.0, 740.0], [560.0, 740.0]]);

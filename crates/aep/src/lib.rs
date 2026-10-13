@@ -4,6 +4,12 @@
 //! into a lossless chunk tree ([`AepFile`]) and writes it back byte for byte. See
 //! `docs/aep-format.md` for the observed format and how it was established (clean room: only
 //! files we generated ourselves, one change per file).
+//!
+//! [`Project::new`] opens a typed, read-only view over the tree: items, compositions
+//! ([`CompHeader`]), layers ([`LayerHeader`], [`Transform`], effects, masks, text documents,
+//! markers), properties, keyframes and footage. Only fields whose layout was verified against the
+//! values the test files were made with are decoded; every accessor returns `None` (or an empty
+//! list) on damaged data instead of failing.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

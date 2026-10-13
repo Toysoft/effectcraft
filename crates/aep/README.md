@@ -13,8 +13,14 @@ opaque rather than failing the parse. Input is untrusted: sizes are checked agai
 input, nesting and chunk count are bounded (`Limits`), nothing is allocated from a declared size,
 and truncated or damaged files return `Err` (or, inside the container, an opaque body).
 
-No field of any chunk body is decoded by the container layer. What is known about the content, and how
-it was found, is in [`docs/aep-format.md`](../../docs/aep-format.md).
+The container layer decodes no chunk body. On top of it, a typed view (`Project`, `Item`, `Comp`, `Layer`,
+`Property`, ...) reads the fields whose layout was verified against the values the test files were made
+with: layer and composition headers (switches, exact times, size, frame rate, work area, renderer),
+static transform values in After Effects' units with the "absent = default" rule, keyframe records,
+expressions, effect instances and parameters, masks and bezier paths, text documents, markers, footage,
+solids and precomp links. Every accessor returns `Option`/an empty list on damaged data and never
+panics. Which fields are verified, which are not decoded, and how it was found is in
+[`docs/aep-format.md`](../../docs/aep-format.md).
 
 ## Clean room
 
