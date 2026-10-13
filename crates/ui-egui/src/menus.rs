@@ -1904,8 +1904,8 @@ fn modifiers_at_start(ctx: &egui::Context) -> Option<egui::Modifiers> {
 }
 
 /// The shortcut contexts active now (`effectcraft_engine::shortcuts::CONTEXT_SCOPES`): text
-/// being edited in the viewer, a paint tool or a camera tool active, a mask selected, a mask or
-/// path points selected, a viewer panel focused.
+/// being edited in the viewer, a paint tool or a camera tool active, a mask selected, a mask, a
+/// shape path or path points selected, a viewer panel focused.
 pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
     let mut out = vec![];
     if app.session.state.text_edit.is_some() {
@@ -1921,8 +1921,9 @@ pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
     if app.session.selected_mask().is_some_and(|m| app.session.state.selected_props.contains(&m)) {
         out.push("Mask");
     }
-    // (Here one of the mask's properties counts too, and so do points of a mask or shape path.)
-    if app.session.selected_mask().is_some() || !app.session.state.selected_vertices.is_empty() {
+    // (Here one of the mask's properties counts too, and so do points of a mask or shape path
+    // and a shape layer's Path.)
+    if crate::panels::viewer_overlays::free_transform_path(app).is_some() {
         out.push("Path");
     }
     if matches!(app.ui.focused, PanelKind::Composition | PanelKind::Layer | PanelKind::Footage | PanelKind::Viewer(_)) {
@@ -2073,6 +2074,9 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
         out
     });
     events.retain(|(key, _, _, _)| (*key == egui::Key::Tab) == tab_only);
+    // A shape being dragged out with a shape tool takes the arrows, Page Up / Page Down and
+    // Spacebar.
+    events.retain(|(key, _, pressed, _)| !crate::panels::shape_draft::key(ctx, *key, *pressed));
     // Numpad * (or `*` typed with Shift+8): Add Marker (#275). egui has no key for it, so it
     // comes as text.
     // (Not the `*` of a Shift+8 that is itself a shortcut: Set Composition Marker 8.)

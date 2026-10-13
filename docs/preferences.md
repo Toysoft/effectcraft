@@ -207,8 +207,8 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   any command can have one (record it by pressing the chord twice, or type `F7 F7`).
   Without a double bound, the second press is the chord's own command again.
 - **Scope.** A shortcut belongs to the application, to a panel (Project, Timeline, Composition,
-  Render Queue…) or to a context (editing text, a paint tool or a camera tool active, a mask
-  or points of a path selected). One chord can be bound once per scope, and the narrowest active scope runs it: an
+  Render Queue…) or to a context (editing text, a paint tool or a camera tool active, a mask,
+  a shape path or points of a path selected). One chord can be bound once per scope, and the narrowest active scope runs it: an
   active context, then the panel with the keyboard, then the application. The Timeline and the
   Composition panel share their shortcuts. A context's shortcuts work only while it is active;
   a panel's shortcut that nothing nearer claims still works from the other panels.
@@ -216,12 +216,19 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   (`text.format.*`: alignment and justification, All Caps, Small Caps, super- and subscript,
   font size ±2 / ±10, leading, baseline shift, kerning / tracking, scale 100%, Auto Leading,
   the paragraph composer). *Mask*: with a mask selected (the mask, not one of its properties)
-  N, A, S, I, D and F set its mode. *Path*: with a mask, one of its properties or points of a
-  mask or shape path selected, Cmd+T (Layer ▸ Mask and Shape Path ▸ Free Transform Points) puts
+  N, A, S, I, D and F set its mode. *Path*: with a mask, one of its properties, a shape layer's Path
+  or points of a mask or shape path selected, Cmd+T (Layer ▸ Mask and Shape Path ▸ Free Transform Points) puts
   the free-transform box around them in the viewer instead of choosing the Type tool: drag
   inside to move, a handle to scale, outside a corner to rotate; Esc, Enter or a click away
   ends it. *Paint*: with a paint tool X swaps the colours, D makes
   them black and white, and 3–7 pick a Clone Stamp preset.
+- **While a shape is dragged out** with a shape tool, before the mouse button is released
+  (these keys are fixed, not in the preset): Up / Down add or remove a point of a polygon or
+  star, or make a rounded rectangle's corners rounder or sharper by 10%; Left / Right lower or
+  raise the Outer Roundness of a polygon or star by 10%, or make a rounded rectangle's corners
+  sharp or fully round; Page Up / Page Down raise or lower a star's Inner Roundness by 10%.
+  Holding Spacebar moves the shape with the pointer instead of resizing it; holding Cmd changes
+  a star's outer radius alone (on the other shapes Cmd draws from the centre).
 - **Held keys.** A tool's bare key held for 0.35 s or longer gives the tool until the key is
   released, then the tool from before comes back; a tap keeps the tool. The Show Snapshot keys
   (F5–F8, slots 1–4) show their snapshot while held; Shift takes the slot and Cmd+Shift purges

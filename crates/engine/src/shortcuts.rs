@@ -41,7 +41,7 @@ pub struct UiCommand {
 }
 
 /// Scopes that are a state of the app rather than a panel: editing text in the viewer, a paint
-/// tool active, a mask selected, a mask or points of a path selected, a camera tool active, a
+/// tool active, a mask selected, a mask, a shape path or points of a path selected, a camera tool active, a
 /// viewer panel (Composition, Layer, Footage) with the keyboard.
 pub const CONTEXT_SCOPES: &[&str] = &["TextEditing", "Paint", "Mask", "Path", "Camera", "Viewer"];
 
