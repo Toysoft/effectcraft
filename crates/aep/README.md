@@ -16,9 +16,11 @@ and truncated or damaged files return `Err` (or, inside the container, an opaque
 The container layer decodes no chunk body. On top of it, a typed view (`Project`, `Item`, `Comp`, `Layer`,
 `Property`, ...) reads the fields whose layout was verified against the values the test files were made
 with: layer and composition headers (switches, exact times, size, frame rate, work area, renderer),
-static transform values in After Effects' units with the "absent = default" rule, keyframe records,
-expressions, effect instances and parameters, masks and bezier paths, text documents, markers, footage,
-solids and precomp links. Every accessor returns `Option`/an empty list on damaged data and never
+static transform values in After Effects' units with the "absent = default" rule, keyframe records
+(interpolation sides, ease, plain and spatial templates), expressions with their enable switch, effect
+instances and parameter values, masks and bezier paths with tangents, shape layer groups, text documents
+(paragraph and style runs, box, justification, tracking), markers with duration and strings, cameras,
+lights, footage, solids and precomp links. Every accessor returns `Option`/an empty list on damaged data and never
 panics. Which fields are verified, which are not decoded, and how it was found is in
 [`docs/aep-format.md`](../../docs/aep-format.md).
 
