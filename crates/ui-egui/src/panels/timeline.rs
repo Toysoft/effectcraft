@@ -2516,13 +2516,43 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 ui.set_clip_rect(right_clip);
                 // Expression text row hint.
                 if let Some(e) = prop.expr.as_ref().filter(|e| e.enabled && app.ui.timeline.expr_closed.contains(uid)) {
-                    gp.text(
-                        pos2(graph_x0 + 8.0, cy),
-                        Align2::LEFT_CENTER,
-                        format!("= {}", e.text.lines().next().unwrap_or("")),
-                        Tokens::mono(11.0),
-                        t.expr_text,
-                    );
+                    let first_key_x = if graph_on {
+                        None
+                    } else {
+                        prop.keys.iter().map(|k| tm.x(layer.comp_time(k.time).seconds())).filter(|&x| x >= graph_x0 - 8.0).reduce(f32::min)
+                    };
+                    let max_hint_x = match first_key_x {
+                        Some(kx) => (kx - 12.0).min(rect.max.x - 14.0),
+                        None => rect.max.x - 14.0,
+                    };
+                    if max_hint_x > graph_x0 + 20.0 {
+                        let hint_rect = Rect::from_min_max(pos2(graph_x0 + 4.0, r.min.y + 1.0), pos2(max_hint_x, r.max.y - 1.0));
+                        let hresp = ui.interact(hint_rect, egui::Id::new(("expr-hint", uid)), Sense::click());
+                        let hcol = if hresp.hovered() { t.text } else { t.expr_text };
+                        let font = Tokens::mono(11.0);
+                        let full_text = format!("= {}", e.text.lines().next().unwrap_or(""));
+                        let room = (hint_rect.width() - 8.0).max(0.0);
+                        let char_w = gp.layout_no_wrap("x".into(), font.clone(), hcol).size().x;
+                        let text = if gp.layout_no_wrap(full_text.clone(), font.clone(), hcol).size().x <= room {
+                            full_text
+                        } else if char_w > 0.0 {
+                            let max_chars = (room / char_w).floor() as usize;
+                            if max_chars > 2 {
+                                let count = max_chars.saturating_sub(1);
+                                let s: String = full_text.chars().take(count).collect();
+                                format!("{s}…")
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
+                        gp.with_clip_rect(hint_rect).text(pos2(graph_x0 + 8.0, cy), Align2::LEFT_CENTER, text, font, hcol);
+                        app.auto.add(&format!("timeline.prop.{uid}.exprHint"), hint_rect, "Expression hint");
+                        if hresp.clicked() {
+                            app.ui.timeline.expr_closed.remove(uid);
+                        }
+                    }
                 }
                 // Keyframes.
                 if !graph_on {

@@ -553,3 +553,37 @@ fn the_expression_twirl_collapses_and_expands_the_expression_row() {
     assert!(!h.state().ui.timeline.expr_closed.contains(&opacity));
     assert!(h.state().auto.find(&expr_id).is_some());
 }
+
+#[test]
+fn collapsed_expression_hint_does_not_overlap_keyframes() {
+    let (mut h, _) = harness();
+    let (layer, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Solid", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        // Add a long expression.
+        let expr = "n = 0; // ".to_string() + &"a".repeat(300);
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": expr})).unwrap();
+        // Add keyframes at 1.0s and 2.0s.
+        s.execute("prop.addKey", json!({"layer": l, "path": "transform/opacity", "time": 1.0, "value": 50.0})).unwrap();
+        s.execute("prop.addKey", json!({"layer": l, "path": "transform/opacity", "time": 2.0, "value": 100.0})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    // Collapse the expression row.
+    h.state_mut().ui.timeline.expr_closed.insert(opacity);
+    h.run_steps(3);
+
+    let hint_id = format!("timeline.prop.{opacity}.exprHint");
+    let hint_entry = h.state().auto.find(&hint_id).expect("exprHint should exist before first keyframe");
+    let hint_rect = hint_entry.rect;
+
+    // Find the first keyframe.
+    let keys: Vec<_> = h.state().auto.query(&format!("timeline.key.{opacity}."));
+    assert!(!keys.is_empty(), "keyframes should be present");
+    let first_key_x = keys.iter().map(|k| k.rect[0]).fold(f32::INFINITY, f32::min);
+
+    // The expression hint must end before the first keyframe.
+    assert!(hint_rect[0] + hint_rect[2] <= first_key_x, "hint right edge {} must not exceed first keyframe x {}", hint_rect[0] + hint_rect[2], first_key_x);
+}
