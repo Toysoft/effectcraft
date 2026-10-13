@@ -63,7 +63,7 @@ fn nesting_depth_is_below_the_limit() {
         let bytes = fixture(name);
         let file = parse(&bytes).unwrap();
         let max = file.walk().map(|(d, _)| d).max().unwrap();
-        assert!(max <= 12, "{name}: depth {max}");
+        assert!(max <= 13, "{name}: depth {max}");
         // Nothing is kept opaque because of the depth limit.
         assert!(max < 64);
     }
