@@ -58,7 +58,7 @@ impl Transform {
 
 /// Reads `N` components from the property `name` of `group` and multiplies them by `scale` (stored
 /// fractions to percent); `default` is in the output units and used when the property is absent.
-fn read<const N: usize>(group: &PropGroup<'_, '_>, name: &str, default: [f64; N], scale: f64) -> Tracked<[f64; N]> {
+pub(crate) fn read<const N: usize>(group: &PropGroup<'_, '_>, name: &str, default: [f64; N], scale: f64) -> Tracked<[f64; N]> {
     let unreadable = Tracked { value: default, source: ValueSource::Unreadable };
     let property = match group.get(name) {
         None => return Tracked { value: default, source: ValueSource::Default },
