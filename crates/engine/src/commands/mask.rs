@@ -181,6 +181,8 @@ fn add_vertex(s: &mut Session, p: &Value) -> Result<Value> {
     let at = p.get("index").and_then(Value::as_u64).map(|i| i as usize);
     let (_, lid) = layer_p(s, p, "mask.addVertex")?;
     let (uid, i) = edit_path_counted(s, p, "mask.addVertex", |sp| {
+        // A loaded path's tangent arrays may be shorter than its vertices (#1250).
+        sp.normalize_tangents();
         let i = at.unwrap_or(sp.vertices.len()).min(sp.vertices.len());
         sp.vertices.insert(i, point);
         sp.in_tangents.insert(i, tin);
@@ -199,6 +201,8 @@ fn set_vertex(s: &mut Session, p: &Value) -> Result<Value> {
         if i >= sp.vertices.len() {
             return Err(bad("mask.setVertex", "no such vertex"));
         }
+        // A loaded path's tangent arrays may be shorter than its vertices (#1250).
+        sp.normalize_tangents();
         if let Some(v) = point {
             sp.vertices[i] = v;
         }
@@ -315,6 +319,9 @@ fn move_vertices(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn delete_vertices(s: &mut Session, p: &Value) -> Result<Value> {
     let n = edit_vertices_counted(s, p, "Delete Mask Vertices", true, |sp, idx| {
+        // A loaded path's tangent arrays may be shorter than its vertices (#1250):
+        // the removes below index them by vertex index.
+        sp.normalize_tangents();
         let mut idx = idx.to_vec();
         idx.sort_unstable();
         idx.dedup();
