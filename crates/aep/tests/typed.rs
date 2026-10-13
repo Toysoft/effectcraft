@@ -255,7 +255,10 @@ fn property_header_facts_hold_in_every_property_of_every_fixture() {
                     assert_eq!(header[68] == 1, p.is_animated(), "{name}");
                     if p.is_animated() {
                         animated += 1;
-                        assert!(p.keys().is_some(), "{name}");
+                        let keys = p.keys().unwrap_or_else(|| panic!("{name}: no key list"));
+                        let (count, w) = (keys.header.count, keys.header.words);
+                        assert_eq!(w[3], count.div_ceil(4), "{name}: word 3");
+                        assert_eq!(w[7], count.div_ceil(4) * 4, "{name}: word 7");
                         assert!(p.static_value().is_none(), "{name}");
                     }
                 });

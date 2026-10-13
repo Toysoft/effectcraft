@@ -104,3 +104,16 @@ fn raw_text_lists_are_kept_opaque() {
     }
     assert!(found >= 1, "expected a LIST btdk kept opaque");
 }
+
+#[test]
+fn list_types_ending_in_a_space_are_kept() {
+    // `LIST Pin ` and `LIST FEE ` occur in every generated project that has an item (all but the
+    // empty one); the space is part of the type.
+    for name in FIXTURES.iter().filter(|n| **n != "001-empty.aep") {
+        let bytes = fixture(name);
+        let file = parse(&bytes).unwrap();
+        for ty in [b"Pin ", b"FEE "] {
+            assert!(file.walk().any(|(_, c)| c.is_list(ty)), "{name}: no LIST {:?}", String::from_utf8_lossy(ty));
+        }
+    }
+}
