@@ -270,3 +270,50 @@ fn hovering_a_title_from_an_open_submenu_switches_menus() {
     assert!(shown(&h, "Keyboard Shortcuts"), "hovering Edit opened it");
     assert!(!shown(&h, "New Project from Template") && !shown(&h, "Open Project"), "and closed File and its submenu");
 }
+
+/// A pointer resting on a title doesn't undo Left / Right: only a moving pointer switches.
+#[test]
+fn a_resting_pointer_does_not_override_the_arrow_keys() {
+    if cfg!(target_os = "macos") {
+        // (Right / Left between menus are tested where the in-window bar is the app's menu.)
+        return;
+    }
+    let mut h = harness();
+    let file = rect(&h, "menu.File");
+    click_at(&mut h, file.center());
+    key(&mut h, Key::ArrowRight);
+    h.run_steps(3);
+    assert!(shown(&h, "Keyboard Shortcuts"), "Right opened Edit with the pointer still on File");
+    assert!(!shown(&h, "Open Project"));
+}
+
+/// Hover switching doesn't keep menus open: choosing an entry and clicking outside close them.
+#[test]
+fn switched_menus_still_close_on_a_choice_or_an_outside_click() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    hover(&mut h, edit.center());
+    let shortcuts = h.query_by_label_contains("Keyboard Shortcuts").unwrap().rect();
+    click_at(&mut h, shortcuts.center());
+    assert_eq!(h.state().dialog, Some(effectcraft_ui_egui::Dialog::Shortcuts), "the switched-to menu's entry ran");
+    assert!(!egui::Popup::is_any_open(&h.ctx), "and closed the menus");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    click_at(&mut h, file.center());
+    hover(&mut h, edit.center());
+    click_at(&mut h, pos2(700.0, 600.0));
+    assert!(!egui::Popup::is_any_open(&h.ctx), "an outside click closed the menus");
+}
+
+/// A title the pointer can't reach (the app is disabled under a dialog) doesn't switch menus.
+#[test]
+fn a_disabled_title_does_not_switch_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    h.state_mut().dialog = Some(effectcraft_ui_egui::Dialog::About);
+    h.run_steps(2);
+    hover(&mut h, edit.center());
+    assert!(!shown(&h, "Keyboard Shortcuts"), "Edit didn't open");
+}
