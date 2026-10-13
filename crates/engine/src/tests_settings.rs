@@ -911,3 +911,23 @@ fn mask_and_paint_keys_live_in_their_contexts() {
     s.execute("paint.clonePreset4", json!({})).unwrap();
     assert_eq!(s.state.paint.clone_preset, 4);
 }
+
+#[test]
+fn a_double_press_is_the_chord_twice() {
+    use crate::shortcuts::{double_of, normalize};
+    assert_eq!(normalize("a a").as_deref(), Some("A A"));
+    assert_eq!(normalize("AA").as_deref(), Some("A A"));
+    assert_eq!(normalize("shift+f7  Shift+F7").as_deref(), Some("Shift+F7 Shift+F7"));
+    assert_eq!(double_of("A A"), Some("A"));
+    assert_eq!(double_of("Cmd+A"), None);
+    // Not doubles: two different chords, a function key.
+    assert_eq!(normalize("A B"), None);
+    assert_eq!(normalize("F11").as_deref(), Some("F11"));
+    // Bindable like any chord, with its own conflicts.
+    let mut s = Session::default();
+    let r = s.execute_checked("shortcuts.set", json!({"command": "layer.newNull", "keys": "F7 F7"})).unwrap();
+    assert_eq!(r["keys"], json!(["F7 F7"]));
+    assert!(r["conflicts"].as_array().unwrap().is_empty(), "{r}");
+    let r = s.execute_checked("shortcuts.set", json!({"command": "layer.newSolid", "keys": "F7F7"}));
+    assert!(r.is_err() || r.unwrap()["keys"] != json!(["F7 F7"]), "only letters and digits double without a space");
+}

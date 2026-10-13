@@ -195,8 +195,17 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   can be duplicated, renamed, deleted, exported and imported (JSON). The active preset is what
   the menus show and what the shortcut dispatcher runs.
 - **Assigning.** Select a command, then press keys in the shortcut field (or type them), or
-  click a key on the keyboard with the modifiers toggled. Conflicts with other commands in an
-  overlapping scope are listed before you assign.
+  click a key on the keyboard with the modifiers toggled, or drag a command onto a key (or a
+  key onto a command). Conflicts with other commands in an overlapping scope are listed before
+  you assign; clicking one selects that command. **Undo** takes back the editor's last change
+  and **Clear** removes the selected command's shortcuts.
+- **Double presses.** A chord pressed twice within 0.6 s is a shortcut of its own, written
+  as the chord twice (`A A`, shown as `AA`): `AA` Material Options, `EE` expressions, `FF`
+  missing effects, `LL` audio waveform, `MM` mask property groups, `PP` paint strokes, Roto
+  Brush and Puppet, `RR` Time Remap, `SS` selected properties, `TT` Mask Opacity, `UU`
+  modified properties. They are listed, shown on their key and rebindable like any other;
+  any command can have one (record it by pressing the chord twice, or type `F7 F7`).
+  Without a double bound, the second press is the chord's own command again.
 - **Scope.** A shortcut belongs to the application, to a panel (Project, Timeline, Composition,
   Render Queue…) or to a context (editing text, a paint tool or a camera tool active, a mask
   selected). One chord can be bound once per scope, and the narrowest active scope runs it: an

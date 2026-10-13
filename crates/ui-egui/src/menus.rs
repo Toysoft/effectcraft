@@ -86,15 +86,16 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("timeline.reveal.masks", "Reveal Masks", [], Some("M")),
     uic!("timeline.reveal.feather", "Reveal Mask Feather", [], Some("F")),
     uic!("timeline.reveal.levels", "Reveal Audio Levels (press twice: Waveform)", [], Some("L")),
-    uic!("timeline.reveal.timeRemap", "Reveal Time Remap", [], None),
-    uic!("timeline.reveal.expressions", "Reveal Expressions", [], None),
-    uic!("timeline.reveal.maskOpacity", "Reveal Mask Opacity", [], None),
+    uic!("timeline.reveal.timeRemap", "Reveal Time Remap", [], Some("R R")),
+    uic!("timeline.reveal.expressions", "Reveal Expressions", [], Some("E E")),
+    uic!("timeline.reveal.maskOpacity", "Reveal Mask Opacity", [], Some("T T")),
     uic!("timeline.reveal.maskPath", "Reveal Mask Path", [], None),
-    uic!("timeline.reveal.material", "Reveal Material Options", [], None),
-    uic!("timeline.reveal.paint", "Reveal Paint, Roto Brush and Puppet", [], None),
-    uic!("timeline.reveal.selected", "Reveal Selected Properties", [], None),
-    uic!("timeline.reveal.missingEffects", "Reveal Missing Effects", [], None),
-    uic!("timeline.reveal.waveform", "Reveal Audio Waveform", [], None),
+    uic!("timeline.reveal.maskGroups", "Reveal Mask Property Groups", [], Some("M M")),
+    uic!("timeline.reveal.material", "Reveal Material Options", [], Some("A A")),
+    uic!("timeline.reveal.paint", "Reveal Paint, Roto Brush and Puppet", [], Some("P P")),
+    uic!("timeline.reveal.selected", "Reveal Selected Properties", [], Some("S S")),
+    uic!("timeline.reveal.missingEffects", "Reveal Missing Effects", [], Some("F F")),
+    uic!("timeline.reveal.waveform", "Reveal Audio Waveform", [], Some("L L")),
     uic!("timeline.revealAdd.position", "Add Position to Revealed Properties", [], Some("Shift+P")),
     uic!("timeline.revealAdd.scale", "Add Scale to Revealed Properties", [], Some("Shift+S")),
     uic!("timeline.revealAdd.rotation", "Add Rotation to Revealed Properties", [], Some("Shift+R")),
@@ -218,6 +219,8 @@ pub fn reveal(app: &mut EffectcraftApp, kind: &str, now: f64, add: bool) {
             d
         }
         _ if pressed == "masks" => "maskPath",
+        // MM: every mask's property group.
+        _ if pressed == "maskGroups" => "masks",
         _ => pressed,
     };
     let targets = reveal_targets(app);
@@ -1642,6 +1645,10 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
 
 /// Shortcut text in this OS's notation (`⇧⌘K` on macOS, `Ctrl+Shift+K` elsewhere).
 pub fn shortcut_text(s: &str) -> String {
+    // A double press: the chord twice (`AA`).
+    if let Some(single) = effectcraft_engine::shortcuts::double_of(s) {
+        return shortcut_text(single).repeat(2);
+    }
     if cfg!(target_os = "macos") {
         let mut out = String::new();
         let parts: Vec<&str> = match s.strip_suffix("++") {
@@ -1739,8 +1746,22 @@ pub type Binding = (egui::Modifiers, egui::Key, String, Value);
 
 /// All bindings of the active keyboard shortcut preset, most modifiers first.
 pub fn bindings(session: &effectcraft_engine::Session) -> Vec<Binding> {
+    chord_bindings(session, false)
+}
+
+/// The double-press bindings (`A A`), by the chord pressed twice.
+pub fn double_bindings(session: &effectcraft_engine::Session) -> Vec<Binding> {
+    chord_bindings(session, true)
+}
+
+fn chord_bindings(session: &effectcraft_engine::Session, doubles: bool) -> Vec<Binding> {
     let mut v: Vec<Binding> = Vec::new();
     for (sc, b) in session.shortcuts().bindings() {
+        let sc = match (effectcraft_engine::shortcuts::double_of(sc), doubles) {
+            (Some(single), true) => single,
+            (None, false) => sc,
+            _ => continue,
+        };
         if sc.starts_with("Physical+") {
             continue;
         }
@@ -1829,6 +1850,13 @@ pub fn context_binding(app: &EffectcraftApp, scope: &str, key: egui::Key, mods: 
         .filter(|(m, k, ..)| *k == key && mods_match(*m, mods))
         .find(|(_, _, id, params)| table.find(&effectcraft_engine::shortcuts::binding_key(id, params)).is_some_and(|b| b.scope == scope))
         .map(|(_, _, id, _)| id)
+}
+
+/// How soon the second press of a double press (`AA`) follows the first, in seconds.
+pub const DOUBLE_PRESS: f64 = 0.6;
+
+fn double_press_id() -> egui::Id {
+    egui::Id::new("shortcut-double-press")
 }
 
 /// Only Shift held (Shift+Delete, not Ctrl/Alt+Shift+Delete).
@@ -2046,6 +2074,41 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
                 app.ui.status = e;
             }
             continue;
+        }
+        // A double press: the same chord again within 0.6 s runs the command bound to the
+        // double (`A A`), if there is one, instead of the chord's own command. The state is
+        // (chord, time, ran a double): a frame drawn again replays its input at the same time,
+        // which is neither a second press nor a reason to run the chord's own command after
+        // its double, and the press after a double starts over.
+        type Last = (egui::Key, egui::Modifiers, f64, bool);
+        let now = ctx.input(|i| i.time);
+        let last = ctx.data(|d| d.get_temp::<Last>(double_press_id())).filter(|(k, m, ..)| *k == key && *m == mods);
+        if matches!(last, Some((_, _, t, true)) if t == now) {
+            continue;
+        }
+        let again = matches!(last, Some((_, _, t, false)) if now > t && now - t < DOUBLE_PRESS);
+        let double = again
+            .then(|| {
+                double_bindings(&app.session)
+                    .into_iter()
+                    .filter(|(m, k, ..)| *k == key && mods_match(*m, mods))
+                    .filter_map(|(_, _, id, params)| rank(&id, &params).map(|r| (r, id, params)))
+                    .min_by_key(|(r, ..)| *r)
+            })
+            .flatten();
+        if !matches!(last, Some((_, _, t, _)) if t == now) {
+            ctx.data_mut(|d| d.insert_temp::<Last>(double_press_id(), (key, mods, now, double.is_some())));
+        }
+        if let Some((_, id, params)) = double {
+            if let Err(e) = invoke(app, ctx, &id, if params.is_null() { json!({}) } else { params }) {
+                app.ui.status = e;
+            }
+            continue;
+        }
+        if again {
+            // No double is bound to this chord: the second press is the chord's own command
+            // again, not a double of whatever ran last.
+            app.last_reveal = None;
         }
         // The narrowest active scope wins a chord: an active context, the focused panel, the
         // application. A context's shortcut doesn't run outside it.
@@ -2298,11 +2361,13 @@ mod tests {
     fn every_ui_shortcut_parses() {
         for c in UI_COMMANDS {
             for sc in c.shortcut.into_iter().flat_map(|s| s.split(", ")) {
+                let sc = effectcraft_engine::shortcuts::double_of(sc).unwrap_or(sc);
                 assert!(parse_shortcut(sc).is_some() || sc == "Num*", "{sc}");
             }
         }
         for (_, e) in effectcraft_engine::menus::entries() {
             if let Some(sc) = &e.shortcut {
+                let sc = effectcraft_engine::shortcuts::double_of(sc).unwrap_or(sc);
                 assert!(parse_shortcut(sc).is_some() || sc == "Num*", "{} ({sc})", e.label);
             }
         }

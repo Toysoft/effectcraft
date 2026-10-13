@@ -1072,7 +1072,7 @@ Animation
   ---
   Reveal Properties with Keyframes | anim.reveal {"kind":"keyframes"} | U
   Reveal Properties with Animation | anim.reveal {"kind":"animation"}
-  Reveal All Modified Properties | anim.reveal {"kind":"modified"}
+  Reveal All Modified Properties | anim.reveal {"kind":"modified"} | U U
 View
   New Viewer | view.newViewer
   Split with New Locked Viewer | view.splitLockedViewer

@@ -156,3 +156,47 @@ fn mask_mode_keys_work_only_with_a_mask_selected() {
     press(&mut app, Key::I, Modifiers::NONE);
     assert!(mode(&app).contains("Intersect"), "{}", mode(&app));
 }
+
+/// Press `key` at `time` seconds in `ctx` (double presses need the same context).
+fn press_at(ctx: &egui::Context, app: &mut EffectcraftApp, key: Key, time: f64) {
+    let raw = egui::RawInput {
+        time: Some(time),
+        // (Released too: a key still down would make the next press a repeat.)
+        events: [true, false].map(|pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }).to_vec(),
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(raw, |ui| effectcraft_ui_egui::menus::handle_shortcuts(app, ui.ctx()));
+    output.textures_delta.clear();
+}
+
+/// A double press runs the command bound to it in the shortcut preset, whatever that is.
+#[test]
+fn a_double_press_runs_its_own_binding() {
+    let mut app = app();
+    app.ui.focused = PanelKind::Timeline;
+    app.session.execute("edit.selectAll", json!({})).unwrap();
+    let ctx = egui::Context::default();
+    // P, then P again at once: PP (paint strokes, Roto Brush, Puppet) replaces Position.
+    press_at(&ctx, &mut app, Key::P, 1.0);
+    assert_eq!(app.ui.timeline.reveal, ["position"]);
+    press_at(&ctx, &mut app, Key::P, 1.2);
+    assert_eq!(app.ui.timeline.reveal, ["paint"], "status: {}", app.ui.status);
+    // Later than a double press, P is Position again.
+    press_at(&ctx, &mut app, Key::P, 5.0);
+    assert_eq!(app.ui.timeline.reveal, ["position"]);
+
+    // Any command can have a double press…
+    app.session.execute("shortcuts.set", json!({"command": "layer.newNull", "keys": "F7 F7"})).unwrap();
+    let before = layers(&app);
+    press_at(&ctx, &mut app, Key::F7, 10.0);
+    assert_eq!(layers(&app), before, "one press isn't the double");
+    press_at(&ctx, &mut app, Key::F7, 10.3);
+    assert_eq!(layers(&app), before + 1);
+    // …and without one bound, the second press is the chord's own command again.
+    app.session.execute("edit.selectAll", json!({})).unwrap();
+    app.session.execute("shortcuts.set", json!({"command": "timeline.reveal.paint", "keys": []})).unwrap();
+    press_at(&ctx, &mut app, Key::P, 20.0);
+    assert!(app.ui.timeline.reveal.is_empty(), "Position was showing: P hides it");
+    press_at(&ctx, &mut app, Key::P, 20.2);
+    assert_eq!(app.ui.timeline.reveal, ["position"], "P again, not PP");
+}

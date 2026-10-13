@@ -13,7 +13,8 @@
 //! `RenderQueue`…: the panel with the keyboard) and the application. One chord can be bound once
 //! per scope; the narrowest active scope runs it ([`scope_rank`]).
 //!
-//! Shortcut text is `Ctrl+Cmd+Alt+Shift+Key` (`Cmd` is ⌘ on macOS and Ctrl elsewhere).
+//! Shortcut text is `Ctrl+Cmd+Alt+Shift+Key` (`Cmd` is ⌘ on macOS and Ctrl elsewhere). A double
+//! press (the chord twice in quick succession: `AA`, `UU`) is the chord twice, `A A`.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -237,6 +238,35 @@ pub fn bindables(ui: &[UiCommand]) -> Vec<Bindable> {
 /// Canonical shortcut text (`cmd+shift+k`, `Shift+Cmd+K`, `⌘⇧K` → `Cmd+Shift+K`); `None` if it
 /// has no key.
 pub fn normalize(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // A double press: the chord twice (`A A`), or a letter or digit doubled (`AA`).
+    let halves = s.split_once(' ').map(|(a, b)| (a.trim(), b.trim())).or_else(|| {
+        let mut c = s.chars();
+        match (c.next(), c.next(), c.next()) {
+            (Some(a), Some(b), None) if a == b && a.is_ascii_alphanumeric() => Some(s.split_at(a.len_utf8())),
+            _ => None,
+        }
+    });
+    if let Some((a, b)) = halves
+        && !a.is_empty()
+        && let (Some(a), Some(b)) = (normalize_chord(a), normalize_chord(b))
+    {
+        // (Two different chords in a row aren't a shortcut.)
+        return (a == b).then(|| format!("{a} {a}"));
+    }
+    normalize_chord(s)
+}
+
+/// The chord of a double press (`A A` → `A`); none for a single press.
+pub fn double_of(sc: &str) -> Option<&str> {
+    sc.split_once(' ').filter(|(a, b)| a == b).map(|(a, _)| a)
+}
+
+/// Canonical text of one chord.
+fn normalize_chord(s: &str) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {
         return None;
