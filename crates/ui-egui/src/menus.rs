@@ -1753,7 +1753,8 @@ fn modifiers_at_start(ctx: &egui::Context) -> Option<egui::Modifiers> {
 }
 
 /// The shortcut contexts active now (`effectcraft_engine::shortcuts::CONTEXT_SCOPES`): text
-/// being edited in the viewer, a paint tool or a camera tool active, a mask selected.
+/// being edited in the viewer, a paint tool or a camera tool active, a mask selected, a viewer
+/// panel focused.
 pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
     let mut out = vec![];
     if app.session.state.text_edit.is_some() {
@@ -1766,6 +1767,9 @@ pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
     }
     if app.session.selected_mask().is_some() {
         out.push("Mask");
+    }
+    if matches!(app.ui.focused, PanelKind::Composition | PanelKind::Layer | PanelKind::Footage | PanelKind::Viewer(_)) {
+        out.push("Viewer");
     }
     out
 }
@@ -2258,9 +2262,11 @@ mod tests {
     #[test]
     fn ui_and_menu_shortcuts_do_not_collide() {
         let app = EffectcraftApp::new(effectcraft_engine::Session::default());
-        let mut seen: std::collections::BTreeMap<(String, String), (String, String)> = Default::default();
+        // A chord is bound once per scope.
+        let mut seen: std::collections::BTreeMap<(String, String, String), (String, String)> = Default::default();
         for (m, k, id, params) in bindings(&app.session) {
-            let key = (format!("{m:?}"), format!("{k:?}"));
+            let scope = app.session.shortcuts().find(&effectcraft_engine::shortcuts::binding_key(&id, &params)).map(|b| b.scope.clone()).unwrap_or_default();
+            let key = (scope, format!("{m:?}"), format!("{k:?}"));
             let target = (id.clone(), params.to_string());
             if let Some(prev) = seen.get(&key) {
                 assert_eq!(prev, &target, "{key:?} bound to {prev:?} and {target:?}");
