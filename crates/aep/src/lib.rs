@@ -10,9 +10,11 @@
 mod chunk;
 mod error;
 mod read;
+mod typed;
 mod write;
 
 pub use chunk::{AepFile, Body, Chunk, LIST, NESTED_IDS, Walk};
 pub use error::AepError;
 pub use read::{Limits, parse, parse_with_limits};
+pub use typed::{Comp, Item, ItemKind, KeyList, Keyframe, Layer, ListHeader, Project, PropEntry, PropGroup, PropNode, Property, TimeBase};
 pub use write::{write, write_to};

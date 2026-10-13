@@ -131,3 +131,64 @@ fn garbage_after_a_valid_header() {
         let _ = check(&b);
     }
 }
+
+/// Touches every accessor of the typed view; none may panic on a damaged tree.
+fn exercise(file: &effectcraft_aep::AepFile<'_>) {
+    use effectcraft_aep::{PropGroup, PropNode};
+    fn group(g: &PropGroup<'_, '_>, depth: usize) {
+        if depth > 24 {
+            return;
+        }
+        let _ = (g.flags(), g.names());
+        for e in g.entries() {
+            match e.node {
+                PropNode::Group(g) => group(&g, depth + 1),
+                PropNode::Property(p) => {
+                    let _ = (p.header(), p.dims(), p.is_animated(), p.static_value());
+                    if let Some(keys) = p.keys() {
+                        for k in keys.keyframes() {
+                            let _ = (k.time_units(), k.spatial_value(), k.raw().len());
+                        }
+                    }
+                }
+                PropNode::Other(c) => {
+                    if let Some(g) = c.child_list(b"tdgp").and_then(PropGroup::from_chunk) {
+                        group(&g, depth + 1);
+                    }
+                }
+            }
+        }
+    }
+    let Some(project) = effectcraft_aep::Project::new(file) else { return };
+    for item in project.all_items() {
+        let _ = (item.kind(), item.name());
+        if let Some(comp) = item.comp() {
+            let tb = comp.time_base();
+            let _ = tb.map(|t| (t.frame_rate(), t.seconds(i32::MIN), t.seconds(i32::MAX)));
+            for layer in comp.layers() {
+                let _ = (layer.name(), layer.is_three_d());
+                if let Some(root) = layer.properties() {
+                    group(&root, 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn typed_view_survives_damaged_files() {
+    for (name, iterations) in [("000-base.aep", 1500), ("055-key-position-3key-inserted-t2.5.aep", 800), ("071-fx-slider-value77.aep", 800)] {
+        let original = fixture(name);
+        let mut rng = Rng(0xfeed_beef_1234_5678 ^ original.len() as u64);
+        for _ in 0..iterations {
+            let mut b = original.clone();
+            for _ in 0..=rng.below(12) {
+                let at = rng.below(b.len());
+                b[at] = rng.next() as u8;
+            }
+            if let Ok(file) = parse(&b) {
+                exercise(&file);
+            }
+        }
+    }
+}
