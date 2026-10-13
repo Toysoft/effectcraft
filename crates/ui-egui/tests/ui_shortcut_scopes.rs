@@ -101,3 +101,19 @@ fn new_folders_chord_opens_a_new_viewer_in_a_viewer_only() {
     press(&mut app, Key::N, chord);
     assert_eq!(folders(&app), before, "in the Composition panel the chord is New Viewer");
 }
+
+/// Add Marker has a main-keyboard key on macOS (Ctrl+8) for keyboards without a numeric keypad;
+/// like numpad *, it marks the selected layers, or the composition when none is selected.
+#[cfg(target_os = "macos")]
+#[test]
+fn ctrl_8_adds_a_marker_like_numpad_multiply() {
+    let mut app = app();
+    let layer_markers = |app: &EffectcraftApp| app.session.active_comp().map_or(0, |c| c.layers.iter().map(|l| l.markers.len()).sum::<usize>());
+    let comp_markers = |app: &EffectcraftApp| app.session.active_comp().map_or(0, |c| c.markers.len());
+    app.session.execute("edit.selectAll", json!({})).unwrap();
+    press(&mut app, Key::Num8, Modifiers::CTRL);
+    assert_eq!((layer_markers(&app), comp_markers(&app)), (1, 0));
+    app.session.execute("edit.deselectAll", json!({})).unwrap();
+    press(&mut app, Key::Num8, Modifiers::CTRL);
+    assert_eq!((layer_markers(&app), comp_markers(&app)), (1, 1));
+}

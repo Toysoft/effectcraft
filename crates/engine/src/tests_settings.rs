@@ -870,3 +870,21 @@ fn default_keys_shared_between_a_panel_and_the_application() {
     }
     assert!(t.all_conflicts().is_empty(), "{:?}", t.all_conflicts());
 }
+
+#[test]
+fn numeric_keypad_shortcuts_have_main_keyboard_keys_on_macos() {
+    let mut s = Session::default();
+    s.set_ui_commands(vec![crate::shortcuts::UiCommand {
+        id: "playback.preview.altNumpad0".into(),
+        label: "Preview (Alt+Numpad 0)".into(),
+        shortcut: Some("Alt+Num0, Ctrl+Alt+0".into()),
+        scope: None,
+    }]);
+    let t = s.shortcuts();
+    // `Ctrl` is its own key on macOS only; elsewhere the alternates aren't defaults.
+    let (marker, preview): (&[&str], &[&str]) =
+        if cfg!(target_os = "macos") { (&["Num*", "Ctrl+8"], &["Alt+Num0", "Ctrl+Alt+0"]) } else { (&["Num*"], &["Alt+Num0"]) };
+    assert_eq!(t.keys["comp.addMarker"], marker);
+    assert_eq!(t.keys["playback.preview.altNumpad0"], preview);
+    assert!(t.all_conflicts().is_empty(), "{:?}", t.all_conflicts());
+}

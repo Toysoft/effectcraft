@@ -32,6 +32,7 @@ pub const APP_SCOPE: &str = "Application";
 pub struct UiCommand {
     pub id: String,
     pub label: String,
+    /// Default keys; several are separated by `, ` (menus and tooltips show the first).
     pub shortcut: Option<String>,
     /// Its scope; none: from its id (`timeline.*` → Timeline, `view.*` → Composition).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,12 +138,20 @@ fn ui_scope(id: &str) -> &'static str {
     }
 }
 
+/// Whether a default chord can be pressed here. `Ctrl` is a key of its own only on macOS (the
+/// main-keyboard alternates of the numeric-keypad shortcuts, `Ctrl+8`…); elsewhere it is `Cmd`,
+/// so such a default would be a second, different chord.
+fn default_applies(sc: &str) -> bool {
+    cfg!(target_os = "macos") || !sc.split('+').any(|p| p == "Ctrl")
+}
+
 /// Every bindable command: menu entries, registry commands outside the menus, then the
 /// frontend's own commands.
 pub fn bindables(ui: &[UiCommand]) -> Vec<Bindable> {
     let mut out: Vec<Bindable> = vec![];
     let mut seen: HashMap<String, usize> = HashMap::new();
-    let mut push = |b: Bindable, out: &mut Vec<Bindable>| {
+    let mut push = |mut b: Bindable, out: &mut Vec<Bindable>| {
+        b.defaults.retain(|d| default_applies(d));
         if let Some(&i) = seen.get(&b.key) {
             // Same command in two menus: merge defaults.
             for d in b.defaults {
@@ -204,7 +213,7 @@ pub fn bindables(ui: &[UiCommand]) -> Vec<Bindable> {
                 label: c.label.clone(),
                 path: vec![cat],
                 scope: scope.into(),
-                defaults: c.shortcut.as_deref().and_then(normalize).into_iter().collect(),
+                defaults: c.shortcut.as_deref().into_iter().flat_map(|s| s.split(", ")).filter_map(normalize).collect(),
             },
             &mut out,
         );

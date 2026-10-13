@@ -31,7 +31,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("playback.ramPreview", "Preview (Numpad 0)", [], Some("Num0")),
     uic!("playback.preview.shiftSpacebar", "Preview (Shift+Spacebar)", [], Some("Shift+Space")),
     uic!("playback.preview.shiftNumpad0", "Preview (Shift+Numpad 0)", [], Some("Shift+Num0")),
-    uic!("playback.preview.altNumpad0", "Preview (Alt+Numpad 0)", [], Some("Alt+Num0")),
+    uic!("playback.preview.altNumpad0", "Preview (Alt+Numpad 0)", [], Some("Alt+Num0, Ctrl+Alt+0")),
     uic!("playback.stop", "Stop", [], None),
     uic!("view.fit", "Fit", [], Some("Shift+/")),
     uic!("view.actualSize", "100%", [], Some("/")),
@@ -1779,6 +1779,12 @@ fn only_shift(m: egui::Modifiers) -> bool {
     m.shift && !m.alt && !m.ctrl && !m.command && !m.mac_cmd
 }
 
+/// Add Marker from the keyboard marks the selected layers; only with none selected does it add
+/// a composition marker (#976).
+fn marker_command(app: &EffectcraftApp, id: String) -> String {
+    if id == "comp.addMarker" && !app.session.state.selected_layers.is_empty() { "layer.addMarker".to_owned() } else { id }
+}
+
 /// Dispatch keyboard shortcuts (skipped while typing in a text field).
 pub fn handle_shortcuts(app: &mut EffectcraftApp, ctx: &egui::Context) {
     handle_shortcuts_impl(app, ctx, false);
@@ -1886,9 +1892,7 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
         let bound = app.session.shortcuts().bindings().into_iter().find(|(k, _)| *k == "Num*").map(|(_, b)| (b.command.clone(), b.params.clone()));
         // As in After Effects, it marks the selected layers; only with none selected does it add
         // a composition marker (#976).
-        let bound = bound.map(|(id, params)| {
-            if id == "comp.addMarker" && !app.session.state.selected_layers.is_empty() { ("layer.addMarker".to_owned(), params) } else { (id, params) }
-        });
+        let bound = bound.map(|(id, params)| (marker_command(app, id), params));
         if let Some((id, params)) = bound
             && let Err(e) = invoke(app, ctx, &id, if params.is_null() { json!({}) } else { params })
         {
@@ -1994,7 +1998,7 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
             .filter_map(|(_, _, id, params)| rank(id, params).map(|r| (r, id, params)))
             .min_by_key(|(r, ..)| *r);
         if let Some((_, id, params)) = chosen {
-            let (id, params) = (id.clone(), if params.is_null() { json!({}) } else { params.clone() });
+            let (id, params) = (marker_command(app, id.clone()), if params.is_null() { json!({}) } else { params.clone() });
             if id == "edit.paste"
                 && let Some(t) = &pasted
             {
@@ -2236,7 +2240,7 @@ mod tests {
     #[test]
     fn every_ui_shortcut_parses() {
         for c in UI_COMMANDS {
-            if let Some(sc) = c.shortcut {
+            for sc in c.shortcut.into_iter().flat_map(|s| s.split(", ")) {
                 assert!(parse_shortcut(sc).is_some() || sc == "Num*", "{sc}");
             }
         }
