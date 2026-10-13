@@ -6,38 +6,18 @@
 //! stays reachable through the raw [`Chunk`] tree. Views borrow the file and never fail loudly:
 //! a chunk that does not have the expected shape yields `None` or is skipped.
 
+use crate::bytes::{be_f64, be_u16, be_u32, text, until_nul};
 use crate::chunk::{AepFile, Chunk};
 
-fn text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
-}
-
 /// The content of a `Utf8` child as text (not trimmed).
-fn utf8_child(chunk: &Chunk<'_>) -> Option<String> {
+pub(crate) fn utf8_child(chunk: &Chunk<'_>) -> Option<String> {
     chunk.child(b"Utf8").and_then(Chunk::bytes).map(text)
-}
-
-fn be_u16(b: &[u8], at: usize) -> Option<u16> {
-    let s = b.get(at..at.checked_add(2)?)?;
-    Some(u16::from_be_bytes([*s.first()?, *s.get(1)?]))
-}
-
-fn be_u32(b: &[u8], at: usize) -> Option<u32> {
-    let s = b.get(at..at.checked_add(4)?)?;
-    Some(u32::from_be_bytes([*s.first()?, *s.get(1)?, *s.get(2)?, *s.get(3)?]))
-}
-
-fn be_f64(b: &[u8], at: usize) -> Option<f64> {
-    let s = b.get(at..at.checked_add(8)?)?;
-    let mut a = [0u8; 8];
-    a.copy_from_slice(s);
-    Some(f64::from_be_bytes(a))
 }
 
 /// The project: the top-level `LIST Fold`, which holds the project items.
 #[derive(Debug, Clone, Copy)]
 pub struct Project<'f, 'a> {
-    fold: &'f Chunk<'a>,
+    pub(crate) fold: &'f Chunk<'a>,
 }
 
 impl<'f, 'a> Project<'f, 'a> {
@@ -83,7 +63,7 @@ pub enum ItemKind {
 /// A project item (`LIST Item`).
 #[derive(Debug, Clone, Copy)]
 pub struct Item<'f, 'a> {
-    chunk: &'f Chunk<'a>,
+    pub(crate) chunk: &'f Chunk<'a>,
 }
 
 impl<'f, 'a> Item<'f, 'a> {
@@ -143,7 +123,7 @@ impl TimeBase {
 /// A composition item (an [`Item`] with `cdta`).
 #[derive(Debug, Clone, Copy)]
 pub struct Comp<'f, 'a> {
-    item: &'f Chunk<'a>,
+    pub(crate) item: &'f Chunk<'a>,
 }
 
 impl<'f, 'a> Comp<'f, 'a> {
@@ -164,7 +144,7 @@ impl<'f, 'a> Comp<'f, 'a> {
 /// A layer (`LIST Layr`).
 #[derive(Debug, Clone, Copy)]
 pub struct Layer<'f, 'a> {
-    chunk: &'f Chunk<'a>,
+    pub(crate) chunk: &'f Chunk<'a>,
 }
 
 impl<'f, 'a> Layer<'f, 'a> {
@@ -214,7 +194,7 @@ pub struct PropEntry<'f, 'a> {
 /// `ADBE Group End` closes the group and names nothing.
 #[derive(Debug, Clone, Copy)]
 pub struct PropGroup<'f, 'a> {
-    chunk: &'f Chunk<'a>,
+    pub(crate) chunk: &'f Chunk<'a>,
 }
 
 impl<'f, 'a> PropGroup<'f, 'a> {
@@ -282,15 +262,14 @@ impl<'f, 'a> PropGroup<'f, 'a> {
 
 /// The match name in a `tdmn` body: ASCII up to the first NUL.
 fn match_name(body: &[u8]) -> String {
-    let end = body.iter().position(|b| *b == 0).unwrap_or(body.len());
-    text(body.get(..end).unwrap_or(&[]))
+    text(until_nul(body))
 }
 
 /// A property (`LIST tdbs`): `tdsb`, `tdsn`, the 124-byte header `tdb4`, then either the static
 /// value `cdat` or a keyframe `LIST list`.
 #[derive(Debug, Clone, Copy)]
 pub struct Property<'f, 'a> {
-    chunk: &'f Chunk<'a>,
+    pub(crate) chunk: &'f Chunk<'a>,
 }
 
 impl<'f, 'a> Property<'f, 'a> {
@@ -407,7 +386,7 @@ impl<'f> KeyList<'f> {
 /// ([`TimeBase`]).
 #[derive(Debug, Clone, Copy)]
 pub struct Keyframe<'f> {
-    record: &'f [u8],
+    pub(crate) record: &'f [u8],
 }
 
 impl<'f> Keyframe<'f> {
@@ -421,12 +400,9 @@ impl<'f> Keyframe<'f> {
         be_u32(self.record, 0).map(|u| i32::from_be_bytes(u.to_be_bytes()))
     }
 
-    /// The value of a 3-component spatial keyframe (Position): a 128-byte record whose 16-bit
-    /// word at byte 6 is 7 holds x, y and z as `f64` at bytes 56, 64 and 72.
+    /// The value of a 3-component spatial keyframe (Position): a 128-byte record holds x, y and
+    /// z as `f64` at bytes 56, 64 and 72. See [`Keyframe::spatial`] for the other fields.
     pub fn spatial_value(&self) -> Option<[f64; 3]> {
-        if self.record.len() != 128 || be_u16(self.record, 6)? != 7 {
-            return None;
-        }
-        Some([be_f64(self.record, 56)?, be_f64(self.record, 64)?, be_f64(self.record, 72)?])
+        self.spatial().map(|s| s.value)
     }
 }

@@ -63,3 +63,20 @@ pub fn fixture(name: &str) -> Vec<u8> {
     let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "fixtures", name].iter().collect();
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
+
+use effectcraft_aep::{AepFile, Comp, Layer, Project, parse};
+
+/// Parses a fixture; the bytes must outlive the file, so the caller keeps them.
+pub fn open(bytes: &[u8]) -> AepFile<'_> {
+    parse(bytes).expect("fixture parses")
+}
+
+/// The first composition of a project (comp `C` in the corpus; in 124 the precomp `Pre` comes later).
+pub fn first_comp<'f, 'a>(project: &Project<'f, 'a>) -> Comp<'f, 'a> {
+    project.all_items().into_iter().find_map(|i| i.comp()).expect("a composition")
+}
+
+/// The layer with this id in the first composition (the solid `L` of the corpus has id 0x1b).
+pub fn layer_with_id<'f, 'a>(comp: &Comp<'f, 'a>, id: u32) -> Layer<'f, 'a> {
+    comp.layers().find(|l| l.id() == Some(id)).unwrap_or_else(|| panic!("no layer with id {id:#x}"))
+}

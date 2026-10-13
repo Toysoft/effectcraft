@@ -7,14 +7,23 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod bytes;
 mod chunk;
 mod error;
+mod footage;
+mod header;
+mod keys;
 mod read;
 mod typed;
+mod values;
 mod write;
 
 pub use chunk::{AepFile, Body, Chunk, LIST, NESTED_IDS, Walk};
 pub use error::AepError;
+pub use footage::Footage;
+pub use header::{BlendMode, CompHeader, LayerHeader, LayerType, Quality, Rational, Renderer};
+pub use keys::{ExpressionFlags, Interpolation, KeyframeKind, SpatialKey};
 pub use read::{Limits, parse, parse_with_limits};
 pub use typed::{Comp, Item, ItemKind, KeyList, Keyframe, Layer, ListHeader, Project, PropEntry, PropGroup, PropNode, Property, TimeBase};
+pub use values::{Tracked, Transform, ValueSource};
 pub use write::{write, write_to};

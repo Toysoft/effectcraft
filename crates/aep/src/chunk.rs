@@ -104,6 +104,17 @@ impl<'a> Chunk<'a> {
         self.children().iter().find(|c| c.is_list(list_type))
     }
 
+    /// Visits every chunk below this one depth-first (children before later siblings), without
+    /// recursion; the depth counts from 1 for the children of this chunk.
+    pub fn descendants(&self) -> Walk<'_, 'a> {
+        Walk { stack: vec![(self.children().iter(), 1)] }
+    }
+
+    /// The first descendant `LIST` of this type, searching depth-first.
+    pub fn find_list(&self, list_type: &[u8; 4]) -> Option<&Chunk<'a>> {
+        self.descendants().map(|(_, c)| c).find(|c| c.is_list(list_type))
+    }
+
     /// Copies all borrowed bytes so the tree no longer borrows the input.
     pub fn into_owned(self) -> Chunk<'static> {
         let body = match self.body {
