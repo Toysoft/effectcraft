@@ -780,7 +780,7 @@ Layer
     Closed | mask.setClosed
     Convert To Bezier Path | path.convertToBezier
     Set First Vertex | path.setFirstVertex
-    Free Transform Points | path.freeTransform
+    Free Transform Points | path.freeTransform | Cmd+T
   Quality
     Best | layer.quality {"quality":"best"} | Cmd+U
     Draft | layer.quality {"quality":"draft"} | Cmd+Shift+U

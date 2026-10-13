@@ -24,7 +24,7 @@ feel and platform differences, and the 26.x interface changes are not in yet.
 | Numeric entry | Scrubbable values, typed entry with Tab / Shift+Tab, angle revolutions, Escape cancels, non-finite rejected | 85% | `ui_angles`, `ui_inline_edit` (#93, #141, #361); rename arrows on Linux (#488) |
 | Effect Controls | After Effects' twirl-downs, angle dial, point crosshair, eyedropper, curves/levels editors, effect menu on right-click | 70% | `ui_effect_controls`, `ui_fx_editors`; 26.5 rebuilt this panel with icon controls and effect colour labels: labels exist (a colour bar on the effect header, right-click Label menu, `effect.setLabel`; not in the Timeline), the rebuilt controls are not matched |
 | Context menus | Layer, property, Project, Timeline empty area, work area, labels with colours | 80% | `ui_blank_context_menus`, `ui_project_rows`; #227, #290, #407 fixed; a comp's Project row menu has Composition Settings… (#1058) |
-| Keyboard shortcuts | After Effects' defaults; Keyboard Shortcuts editor that rebinds and saves sets | 85% | 351 of the 393 keyboard rows of the shortcut reference are default bindings. Panel and context scopes (one chord per scope: text formatting while editing text, mask modes, paint and camera-tool keys); double presses (`AA`, `UU`…) are preset shortcuts; held tool keys are momentary; four snapshot slots; numbered composition markers. The editor has Undo, Clear, drag to assign and clickable conflicts. Missing: the numeric keypad's shortcuts and those that need a feature that isn't there, all listed under [Missing keyboard shortcuts](#missing-keyboard-shortcuts); no shortcuts for scripts. #467 (adding shortcuts on Linux), #428 and #336 are closed |
+| Keyboard shortcuts | After Effects' defaults; Keyboard Shortcuts editor that rebinds and saves sets | 85% | 352 of the 393 keyboard rows of the shortcut reference are default bindings. Panel and context scopes (one chord per scope: text formatting while editing text, mask modes, the free-transform box of a mask, paint and camera-tool keys); double presses (`AA`, `UU`…) are preset shortcuts; held tool keys are momentary; four snapshot slots; numbered composition markers. The editor has Undo, Clear, drag to assign and clickable conflicts. Missing: the numeric keypad's shortcuts and those that need a feature that isn't there, all listed under [Missing keyboard shortcuts](#missing-keyboard-shortcuts); no shortcuts for scripts. #467 (adding shortcuts on Linux), #428 and #336 are closed |
 | Drag and drop | Project → Timeline / viewer / New Comp / Render Queue; effects onto layers; files from the OS | 65% | `ui_drag_drop`; OS drops fail on Wayland (winit) and some Linux setups (#268); #552, #351 (multi-file drops) and #511 (crash dragging over the import dialog) are closed |
 | Text editing on canvas | Point and paragraph text, per-character styles, Character / Paragraph panels, OpenType and variable axes | 70% | `ui_text_edit`, `ui_font_search`; paragraph alignment inverted (#316); toolbar font options (#550); font search by typing (#583) is closed; the font menus' variable-font filter (26.3) landed (#741) |
 | Preview feel | Spacebar / Numpad 0 previews, RAM preview, cache bars, adaptive resolution | 55% | `ui_ram_preview`, `ui_live_preview`; stutter (#595, #304); scrubbing lag (#329, closed by #784) |
@@ -35,7 +35,7 @@ feel and platform differences, and the 26.x interface changes are not in yet.
 
 ## Missing keyboard shortcuts
 
-Every keyboard shortcut of the shortcut reference that has no default binding yet: the 42 of its
+Every keyboard shortcut of the shortcut reference that has no default binding yet: the 41 of its
 393 keyboard rows counted above (paired here where a row has an opposite, and the keys of a shape
 being dragged out spelled out), and one that works at startup. `Cmd` is ⌘ on macOS and Ctrl
 elsewhere. Mouse
@@ -82,8 +82,7 @@ Each needs something that isn't there yet, named in the last column.
 | 3D layers | Switch to the Position gizmo | `4` | 3D gizmo modes |
 | 3D layers | Switch to the Scale gizmo | `5` | 3D gizmo modes |
 | 3D layers | Switch to the Rotation gizmo | `6` | 3D gizmo modes |
-| Masks | Enter free-transform mask editing mode | `Cmd+T` | A free-transform mode in the viewer (`path.freeTransform` takes numbers only) |
-| Shape layers | Enter free-transform path editing mode | `Cmd+T` | The same free-transform mode |
+| Shape layers | Enter free-transform path editing mode | `Cmd+T` | `Cmd+T` puts the free-transform box around a mask and around the selected points of any path; a shape path selected in the Timeline with none of its points selected doesn't count yet |
 | Shape layers | While dragging to create a shape: more / fewer points of a star or polygon, more / less roundness of a rounded rectangle | `Up Arrow` / `Down Arrow` | An adjustable draft of the shape being dragged out |
 | Shape layers | While dragging to create a shape: outer roundness of a polygon or star, sharp / fully round corners of a rounded rectangle | `Left Arrow` / `Right Arrow` | The same draft |
 | Shape layers | While dragging to create a shape: more / less inner roundness of a star | `Page Up` / `Page Down` | The same draft |
@@ -105,6 +104,7 @@ Effects running; most of the rest parallelises.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | `Cmd+T` enters the free-transform box of the selected mask or path points; its row left the missing shortcuts |
 | 2026-10-13 | minor | Keyboard shortcuts row updated after the scopes, contexts, editor and missing-keys work; the missing shortcuts listed |
 | 2026-10-12 | minor | Closed issues (#302, #320, #491, #511, #553 and others) marked as closed instead of open; panels in their own windows (#486) |
 | 2026-10-12 | minor | Percentage guides and effect colour labels (26.5) added; rows updated |

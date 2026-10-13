@@ -432,6 +432,11 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
     if crate::panels::layer_styles_dialog::route(app, id, &params)? {
         return Ok(Value::Null);
     }
+    // Free Transform Points with a mask or path points selected puts the box around them in the
+    // viewer; with only layers selected it asks for the numbers (all their masks).
+    if id == "path.freeTransform" && no_params(&params) && crate::panels::viewer_overlays::enter_free_transform(app, ctx) {
+        return Ok(json!({"freeTransform": true}));
+    }
     // Legacy per-panel / per-workspace ids (`window.panel.Project`, `window.workspace.default`).
     if let Some(rest) = id.strip_prefix("window.panel.") {
         return frontend(app, ctx, "window.panel", json!({"panel": rest}));
@@ -1899,8 +1904,8 @@ fn modifiers_at_start(ctx: &egui::Context) -> Option<egui::Modifiers> {
 }
 
 /// The shortcut contexts active now (`effectcraft_engine::shortcuts::CONTEXT_SCOPES`): text
-/// being edited in the viewer, a paint tool or a camera tool active, a mask selected, a viewer
-/// panel focused.
+/// being edited in the viewer, a paint tool or a camera tool active, a mask selected, a mask or
+/// path points selected, a viewer panel focused.
 pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
     let mut out = vec![];
     if app.session.state.text_edit.is_some() {
@@ -1915,6 +1920,10 @@ pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
     // the Timeline's reveal keys.)
     if app.session.selected_mask().is_some_and(|m| app.session.state.selected_props.contains(&m)) {
         out.push("Mask");
+    }
+    // (Here one of the mask's properties counts too, and so do points of a mask or shape path.)
+    if app.session.selected_mask().is_some() || !app.session.state.selected_vertices.is_empty() {
+        out.push("Path");
     }
     if matches!(app.ui.focused, PanelKind::Composition | PanelKind::Layer | PanelKind::Footage | PanelKind::Viewer(_)) {
         out.push("Viewer");

@@ -208,7 +208,7 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   Without a double bound, the second press is the chord's own command again.
 - **Scope.** A shortcut belongs to the application, to a panel (Project, Timeline, Composition,
   Render Queue…) or to a context (editing text, a paint tool or a camera tool active, a mask
-  selected). One chord can be bound once per scope, and the narrowest active scope runs it: an
+  or points of a path selected). One chord can be bound once per scope, and the narrowest active scope runs it: an
   active context, then the panel with the keyboard, then the application. The Timeline and the
   Composition panel share their shortcuts. A context's shortcuts work only while it is active;
   a panel's shortcut that nothing nearer claims still works from the other panels.
@@ -216,7 +216,11 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   (`text.format.*`: alignment and justification, All Caps, Small Caps, super- and subscript,
   font size ±2 / ±10, leading, baseline shift, kerning / tracking, scale 100%, Auto Leading,
   the paragraph composer). *Mask*: with a mask selected (the mask, not one of its properties)
-  N, A, S, I, D and F set its mode. *Paint*: with a paint tool X swaps the colours, D makes
+  N, A, S, I, D and F set its mode. *Path*: with a mask, one of its properties or points of a
+  mask or shape path selected, Cmd+T (Layer ▸ Mask and Shape Path ▸ Free Transform Points) puts
+  the free-transform box around them in the viewer instead of choosing the Type tool: drag
+  inside to move, a handle to scale, outside a corner to rotate; Esc, Enter or a click away
+  ends it. *Paint*: with a paint tool X swaps the colours, D makes
   them black and white, and 3–7 pick a Clone Stamp preset.
 - **Held keys.** A tool's bare key held for 0.35 s or longer gives the tool until the key is
   released, then the tool from before comes back; a tap keeps the tool. The Show Snapshot keys

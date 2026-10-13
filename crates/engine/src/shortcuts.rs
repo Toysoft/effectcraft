@@ -41,9 +41,9 @@ pub struct UiCommand {
 }
 
 /// Scopes that are a state of the app rather than a panel: editing text in the viewer, a paint
-/// tool active, a mask selected, a camera tool active, a viewer panel (Composition, Layer,
-/// Footage) with the keyboard.
-pub const CONTEXT_SCOPES: &[&str] = &["TextEditing", "Paint", "Mask", "Camera", "Viewer"];
+/// tool active, a mask selected, a mask or points of a path selected, a camera tool active, a
+/// viewer panel (Composition, Layer, Footage) with the keyboard.
+pub const CONTEXT_SCOPES: &[&str] = &["TextEditing", "Paint", "Mask", "Path", "Camera", "Viewer"];
 
 /// Engine commands and menu entries whose shortcuts belong to one panel or context (binding key
 /// → scope). Every other one is application-wide; frontend commands state their own.
@@ -57,6 +57,8 @@ const SCOPES: &[(&str, &str)] = &[
     ("roto.showAlphaOverlay", "Layer"),
     // The mode of the selected mask: single letters, the Timeline's reveal keys otherwise.
     ("layer.mask.mode", "Mask"),
+    // The free-transform box around a mask or the selected path points; the Type tools otherwise.
+    ("path.freeTransform", "Path"),
     // With a paint tool: the colours and the Clone Stamp presets.
     ("paint.swapColors", "Paint"),
     ("paint.stepEarlier", "Paint"),
