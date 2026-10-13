@@ -3,8 +3,9 @@
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** third round of verified field layouts (explicit-default semantics, type-major bezier ease, exact time stretch and in / out points, Time Remapping state, comp pixel aspect / shutter phase / display start, Point default, Layer Control None, dropdown selection, one `mkif` per mask, polystar and radial gradient records, text styles, camera and light options, marker cue data, audio and image-sequence footage) added to the typed view of `effectcraft-aep` · **Target:** Adobe After Effects 2026
 
 What `crates/aep` ([`effectcraft-aep`](../crates/aep/README.md)) reads and writes, and the evidence
-for each statement. Everything here was observed on project files we generated ourselves; nothing
-comes from a third-party parser, specification or source. This is the container and a set of
+for each statement. Everything here was observed on project files we generated ourselves; no
+source code, specification or format documentation of any other reader was used (every layout is
+backed by our own cases, see section 5). This is the container and a set of
 verified field layouts, not a project importer: turning a parsed `.aep` into an EffectCraft
 document is future work (see [gaps.md](gaps.md) G4 and [file-format-parity.md](file-format-parity.md)).
 
@@ -43,7 +44,7 @@ pins what the fixtures contain); fields that the corpus does not decide (**?**) 
 | `LIST btdk` is not a chunk sequence: its body (7775 bytes in `110`) is text. A reader must keep it opaque. Only files with a text layer have it. | `110`-`114`, `243`-`248`; test `raw_text_lists_are_kept_opaque`. |
 | Three non-`LIST` ids hold a chunk instead of data: `tdsn`, `pdnm`, `fnam`. Each holds exactly one `Utf8` chunk (a name or label, UTF-8 text, possibly empty). | `tdsn` 31 209 times, `fnam` 40, `pdnm` 32 over the corpus; test `nested_chunk_ids_hold_one_utf8_chunk`. |
 | Ids can end in a space; the space is part of the id. In the corpus this happens for the list types `Pin ` and `FEE `. All ids are 4 printable ASCII bytes. | `Pin `, `FEE ` in all files but `001`; tests `list_types_ending_in_a_space_are_kept`, `ids_ending_in_a_space_are_kept`. |
-| Payloads are plain: no compression, no encryption. Text is readable, numbers are IEEE big-endian doubles or integers. | `010` (the layer name `Renamed` is readable in a `Utf8` chunk), `040` (`100.0` and `200.0` as doubles). |
+| Every payload that is decoded here is plain: no compression, no encryption. Text is readable, numbers are IEEE big-endian doubles or integers. Entropy and decompression probes (zlib, raw deflate, gzip, lzma, bz2, LZ4 block) over all chunk ids of the corpus found no compressed chunk, and consecutive saves of a project differ in only a few bytes. **One body is not understood: `opti` (footage and render options) has a plain 125-byte header and then a high-entropy body (7.9 bits per byte); whether it is compressed is open.** The high entropy of `sdat` is a flat histogram (five identity ramps 0..255), not random data. | `010` (the layer name `Renamed` is readable in a `Utf8` chunk), `040` (`100.0` and `200.0` as doubles). |
 
 ### How the crate handles it
 
