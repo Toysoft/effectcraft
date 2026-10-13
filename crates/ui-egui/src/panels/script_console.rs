@@ -126,7 +126,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let clear_r = Rect::from_min_size(pos2(bar.max.x - 128.0, bar.min.y + 2.0), vec2(56.0, 20.0));
     let run_resp = ui.interact(run_r, egui::Id::new("script-console-run"), Sense::click());
     p.rect_filled(run_r, 3.0, if run_resp.hovered() { t.accent_hover } else { t.accent });
-    p.text(run_r.center(), Align2::CENTER_CENTER, tr("Run"), Tokens::ui(12.0), egui::Color32::WHITE);
+    p.text(run_r.center(), Align2::CENTER_CENTER, tr("Run"), Tokens::ui(12.0), t.on_accent());
     let clear_resp = ui.interact(clear_r, egui::Id::new("script-console-clear"), Sense::click());
     p.rect_stroke(clear_r, 3.0, egui::Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     p.text(clear_r.center(), Align2::CENTER_CENTER, tr("Clear"), Tokens::ui(12.0), t.text);

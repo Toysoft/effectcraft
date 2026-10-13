@@ -109,7 +109,11 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (label, key) = if revert { ("  Revert  ", "dialog.unsaved.revert") } else { ("   Save   ", "dialog.unsaved.save") };
             // Revert discards work: red, like Delete.
-            let r = ui.add(egui::Button::new(egui::RichText::new(label).color(Color32::WHITE)).fill(if revert { t.danger } else { t.accent }));
+            let r = ui.add(egui::Button::new(egui::RichText::new(label).color(if revert { Color32::WHITE } else { t.on_accent() })).fill(if revert {
+                t.danger
+            } else {
+                t.accent
+            }));
             app.auto.add(key, r.rect, label.trim());
             if r.clicked() {
                 answer = Some(if revert { Answer::Discard } else { Answer::Save });

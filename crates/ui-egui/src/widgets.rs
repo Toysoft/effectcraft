@@ -270,7 +270,7 @@ pub fn icon_button(ui: &mut Ui, rect: Rect, icon: Icon, active: bool, t: &Tokens
         ui.painter().rect_filled(rect, 4.0, t.hover);
     }
     let col = if active {
-        Color32::WHITE
+        t.on_accent()
     } else if resp.hovered() {
         t.icon_active
     } else {
@@ -378,7 +378,7 @@ pub fn text_button(ui: &mut Ui, rect: Rect, text: &str, primary: bool, t: &Token
         t.hover
     };
     ui.painter().rect_filled(rect, rect.height() / 2.0, bg);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, Tokens::medium(12.0), if primary { Color32::WHITE } else { t.text });
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, Tokens::medium(12.0), if primary { t.on_accent() } else { t.text });
     resp
 }
 

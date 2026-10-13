@@ -120,6 +120,11 @@ pub fn gradient_rect(painter: &egui::Painter, rect: egui::Rect, top: Color32, bo
 }
 
 impl Tokens {
+    /// Foreground for a filled accent control in the standard dark palette.
+    pub fn on_accent(&self) -> Color32 {
+        if self.kind == ThemeKind::Dark { Color32::from_rgb(0x06, 0x06, 0x07) } else { Color32::WHITE }
+    }
+
     /// The gradient top colour for a fill (a little lighter), or the fill itself when gradients
     /// are off.
     pub fn grad_top(&self, c: Color32) -> Color32 {
@@ -184,7 +189,34 @@ impl Tokens {
             gradients: true,
         };
         match kind {
-            ThemeKind::Dark => dark,
+            ThemeKind::Dark => Tokens {
+                // ArtCraft standard dark roles; editing/timeline semantics stay local.
+                app_bg: Color32::from_rgb(0x12, 0x13, 0x16),
+                header_bg: Color32::from_rgb(0x0a, 0x0a, 0x0c),
+                panel_bg: Color32::from_rgb(0x10, 0x10, 0x14),
+                tab_text: Color32::from_rgb(0xa6, 0xa6, 0xa8),
+                tab_text_active: Color32::WHITE,
+                focus: Color32::from_rgb(0x74, 0xaa, 0xff),
+                accent: Color32::from_rgb(0x2d, 0x81, 0xff),
+                accent_hover: Color32::from_rgb(0x59, 0xa7, 0xff),
+                text: Color32::from_rgb(0xf2, 0xf1, 0xee),
+                text_dim: Color32::from_rgb(0xa6, 0xa6, 0xa8),
+                text_faint: Color32::from_rgb(0x71, 0x71, 0x76),
+                icon: Color32::from_rgb(0xa6, 0xa6, 0xa8),
+                icon_active: Color32::WHITE,
+                hover: Color32::from_rgb(0x32, 0x33, 0x37),
+                pressed: Color32::from_rgb(0x41, 0x42, 0x46),
+                field_bg: Color32::from_rgb(0x06, 0x06, 0x07),
+                field_border: Color32::from_rgb(0x36, 0x37, 0x3a),
+                separator: Color32::from_rgb(0x36, 0x37, 0x3a),
+                row: Color32::from_rgb(0x10, 0x10, 0x14),
+                row_alt: Color32::from_rgb(0x1e, 0x1f, 0x22),
+                row_selected: Color32::from_rgb(0x20, 0x3b, 0x65),
+                hot_text: Color32::from_rgb(0x59, 0xa7, 0xff),
+                fx_header: Color32::from_rgb(0x1e, 0x1f, 0x22),
+                fx_header_active: Color32::from_rgb(0x20, 0x3b, 0x65),
+                ..dark
+            },
             ThemeKind::Darker => Tokens {
                 app_bg: Color32::from_rgb(0x08, 0x08, 0x08),
                 header_bg: Color32::from_rgb(0x16, 0x16, 0x16),
@@ -477,8 +509,8 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens) {
     v.extreme_bg_color = t.field_bg;
     v.faint_bg_color = t.row_alt;
     v.override_text_color = Some(t.text);
-    v.selection.bg_fill = t.accent;
-    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    v.selection.bg_fill = if t.kind == ThemeKind::Dark { t.row_selected } else { t.accent };
+    v.selection.stroke = Stroke::new(1.0, if t.kind == ThemeKind::Dark { t.text } else { Color32::WHITE });
     v.hyperlink_color = t.accent;
     v.window_stroke = Stroke::new(1.0, t.field_border);
     v.window_corner_radius = egui::CornerRadius::same(8);
@@ -656,6 +688,24 @@ mod script_font_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standard_dark_roles_preserve_alternatives_and_timeline_semantics() {
+        let dark = Tokens::for_kind(ThemeKind::Dark);
+        let darker = Tokens::for_kind(ThemeKind::Darker);
+        let light = Tokens::for_kind(ThemeKind::Light);
+        assert_eq!(dark.app_bg, Color32::from_rgb(0x12, 0x13, 0x16));
+        assert_eq!(dark.panel_bg, Color32::from_rgb(0x10, 0x10, 0x14));
+        assert_eq!(dark.accent, Color32::from_rgb(0x2d, 0x81, 0xff));
+        assert_eq!(dark.row_selected, Color32::from_rgb(0x20, 0x3b, 0x65));
+        assert_eq!(dark.on_accent(), Color32::from_rgb(0x06, 0x06, 0x07));
+        assert_eq!(darker.panel_bg, Color32::from_rgb(0x19, 0x19, 0x19));
+        assert_eq!(darker.accent, Color32::from_rgb(0x2d, 0x8c, 0xeb));
+        assert_eq!(light.panel_bg, Color32::from_rgb(0xe6, 0xe6, 0xe6));
+        assert_eq!(light.on_accent(), Color32::WHITE);
+        assert_eq!(dark.cache_green, darker.cache_green);
+        assert_eq!(dark.labels, light.labels);
+    }
 
     /// The last `n` font names of `family`, in order.
     fn tail(family: &[String], n: usize) -> Vec<&str> {
