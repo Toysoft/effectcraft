@@ -1,5 +1,5 @@
 //! Trackpad gestures in the Composition viewer: a two-finger scroll pans, a pinch (and the mouse
-//! wheel) zooms around the pointer (egui_kittest, UI logic only).
+//! wheel, also one that scrolls in pixels) zooms around the pointer (egui_kittest, UI logic only).
 
 use effectcraft_engine::Session;
 use effectcraft_ui_egui::EffectcraftApp;
@@ -59,4 +59,69 @@ fn pinch_and_mouse_wheel_zoom_around_the_pointer() {
     wheel(&mut h, egui::MouseWheelUnit::Point, vec2(0.0, -120.0), egui::Modifiers::ALT);
     let out = rect(&h, "viewer.comp");
     assert!(out.width() < wheeled.width() * 0.9, "Alt + scroll zooms out: {} → {}", wheeled.width(), out.width());
+}
+
+/// Browsers and some high-resolution wheels report a mouse wheel in pixels, as a trackpad does:
+/// it still zooms.
+#[test]
+fn a_pixel_unit_mouse_wheel_zooms() {
+    let mut h = harness();
+    let comp = rect(&h, "viewer.comp");
+    let at = comp.min + comp.size() * 0.25;
+    h.input_mut().events.push(Event::PointerMoved(at));
+    wheel(&mut h, egui::MouseWheelUnit::Point, vec2(0.0, 120.0), Default::default());
+    let zoomed = rect(&h, "viewer.comp");
+    assert!(zoomed.width() > comp.width() * 1.1, "a pixel wheel zooms in: {} → {}", comp.width(), zoomed.width());
+    let still = zoomed.min + zoomed.size() * 0.25;
+    assert!(still.distance(at) < 2.0, "the point under the pointer stays put: {at:?} vs {still:?}");
+    // Shift turns the wheel's scroll sideways: still a wheel, and the next notch zooms.
+    h.input_mut().events.push(Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    wheel(&mut h, egui::MouseWheelUnit::Point, vec2(0.0, 120.0), egui::Modifiers::SHIFT);
+    h.input_mut().events.push(Event::ModifiersChanged(egui::Modifiers::NONE));
+    let before = rect(&h, "viewer.comp");
+    wheel(&mut h, egui::MouseWheelUnit::Point, vec2(0.0, -120.0), Default::default());
+    let out = rect(&h, "viewer.comp");
+    assert!(out.width() < before.width() * 0.9, "the wheel still zooms: {} → {}", before.width(), out.width());
+}
+
+/// A straight vertical trackpad scroll pans when the touch phase says it is a trackpad (macOS),
+/// and after any diagonal scroll; a mouse wheel in lines takes the zoom back.
+#[test]
+fn a_vertical_trackpad_scroll_pans_once_the_trackpad_is_known() {
+    let mut h = harness();
+    let comp = rect(&h, "viewer.comp");
+    h.input_mut().events.push(Event::PointerMoved(comp.center()));
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::Vec2::ZERO,
+        modifiers: Default::default(),
+        phase: egui::TouchPhase::Start,
+    });
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, 50.0),
+        modifiers: Default::default(),
+        phase: egui::TouchPhase::Move,
+    });
+    h.step();
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::Vec2::ZERO,
+        modifiers: Default::default(),
+        phase: egui::TouchPhase::End,
+    });
+    h.run_steps(30);
+    let panned = rect(&h, "viewer.comp");
+    assert!((panned.min.y - comp.min.y - 50.0).abs() < 1.5, "the scroll pans: {:?}", panned.min - comp.min);
+    assert!((panned.width() - comp.width()).abs() < 0.5, "a trackpad scroll doesn't zoom");
+    // Without phases (Windows, Linux, the web) it stays a trackpad.
+    wheel(&mut h, egui::MouseWheelUnit::Point, vec2(0.0, 30.0), Default::default());
+    let again = rect(&h, "viewer.comp");
+    assert!((again.min.y - panned.min.y - 30.0).abs() < 1.5 && (again.width() - comp.width()).abs() < 0.5, "{again:?}");
+    // A wheel that scrolls in lines is a mouse: it zooms, and so does a pixel wheel after it.
+    wheel(&mut h, egui::MouseWheelUnit::Line, vec2(0.0, 3.0), Default::default());
+    let zoomed = rect(&h, "viewer.comp");
+    assert!(zoomed.width() > again.width() * 1.1, "the wheel zooms: {} → {}", again.width(), zoomed.width());
+    wheel(&mut h, egui::MouseWheelUnit::Point, vec2(0.0, 120.0), Default::default());
+    assert!(rect(&h, "viewer.comp").width() > zoomed.width() * 1.1, "a pixel wheel zooms again");
 }

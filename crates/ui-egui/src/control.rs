@@ -363,7 +363,7 @@ pub fn handle(app: &mut EffectcraftApp, ctx: &egui::Context, req: &ControlReques
             let dx = p.get("dx").and_then(Value::as_f64).unwrap_or(0.0) as f32;
             let dy = p.get("dy").and_then(Value::as_f64).unwrap_or(0.0) as f32;
             // `unit: "line"` is a mouse wheel (it zooms the viewers); points are a trackpad
-            // scroll (it pans them). `pinch` is a trackpad pinch's zoom factor.
+            // scroll (the viewers pan once it moves on both axes) or a pixel-precise wheel. `pinch` is a trackpad pinch's zoom factor.
             let unit = if p.get("unit").and_then(Value::as_str) == Some("line") { egui::MouseWheelUnit::Line } else { egui::MouseWheelUnit::Point };
             app.synthetic.push(egui::Event::PointerMoved(pos));
             if dx != 0.0 || dy != 0.0 {
