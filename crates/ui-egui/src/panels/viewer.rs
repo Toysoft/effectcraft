@@ -1348,8 +1348,30 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             }
         };
         ctx.set_cursor_icon(cursor);
+        // #1218: a physical mouse wheel (line-unit scroll) over the monitor steps through the
+        // comp frame by frame, as in After Effects. Trackpad scroll, pinch and Ctrl/Cmd+wheel
+        // still zoom around the pointer.
+        let per_line = ctx.memory(|m| m.options.input_options.line_scroll_speed);
+        let (lines, scroll) = ui.input(|i| {
+            let lines =
+                i.events.iter().fold(0.0f32, |a, e| match e {
+                    egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, modifiers, .. } => {
+                        if modifiers.command || modifiers.ctrl || modifiers.alt { a } else { a + delta.y }
+                    }
+                    _ => a,
+                });
+            (lines, i.smooth_scroll_delta.y - lines * per_line + i.zoom_delta().ln() * 300.0)
+        });
+        if lines.abs() >= 0.01 && area.contains(hp) {
+            let frames = (lines.round() as i64).clamp(-30, 30);
+            if frames != 0 {
+                if app.playback.playing {
+                    let _ = crate::menus::invoke(app, &ctx, "playback.stop", json!({}));
+                }
+                let _ = app.session.execute("time.step", json!({"frames": frames}));
+            }
+        }
         // Scroll wheel zooms around the pointer.
-        let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.zoom_delta().ln() * 300.0);
         if scroll.abs() > 0.1 && area.contains(hp) {
             let k = (scroll / 300.0).exp();
             let nz = (zoom * k).clamp(0.01, 32.0);

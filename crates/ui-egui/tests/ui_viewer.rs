@@ -2270,3 +2270,36 @@ fn mask_marquee_selects_vertices() {
     let sel = &h.state().session.state.selected_vertices;
     assert_eq!(sel.len(), 2, "shift-marquee adds: {sel:?}");
 }
+
+/// #1218: a physical mouse wheel over the monitor steps through the comp's frames;
+/// Ctrl/Cmd+wheel and trackpad scroll still zoom.
+#[test]
+fn mouse_wheel_over_the_monitor_scrubs_frames() {
+    let mut h = harness();
+    let p = rect(&h, "viewer.area").center();
+    h.input_mut().events.push(Event::PointerMoved(p));
+    h.step();
+    let t0 = h.state().session.time();
+    let none = egui::Modifiers::NONE;
+    let line = |dy: f32, modifiers: egui::Modifiers| Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, dy),
+        modifiers,
+        phase: egui::TouchPhase::Move,
+    };
+    h.input_mut().events.push(line(1.0, none));
+    h.step();
+    let t1 = h.state().session.time();
+    assert!(t1 > t0, "wheel up advanced the playhead ({t0:?} -> {t1:?})");
+    h.input_mut().events.push(line(-2.0, none));
+    h.step();
+    assert!(h.state().session.time() < t1, "two lines back moves before the single line forward");
+    // Ctrl+wheel zooms instead of scrubbing.
+    let z0 = h.state().ui.viewer.zoom;
+    let t2 = h.state().session.time();
+    let mods = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    h.input_mut().events.push(line(3.0, mods));
+    h.step();
+    assert_eq!(h.state().session.time(), t2, "Ctrl+wheel must not scrub");
+    assert_ne!(h.state().ui.viewer.zoom, z0, "Ctrl+wheel still zooms");
+}
