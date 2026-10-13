@@ -115,7 +115,7 @@ pub fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-use effectcraft_aep::{AepFile, Comp, Layer, Project, parse};
+use effectcraft_aep::{AepFile, Comp, Layer, LayerType, Project, parse};
 
 /// Parses a fixture; the bytes must outlive the file, so the caller keeps them.
 pub fn open(bytes: &[u8]) -> AepFile<'_> {
@@ -130,4 +130,31 @@ pub fn first_comp<'f, 'a>(project: &Project<'f, 'a>) -> Comp<'f, 'a> {
 /// The layer with this id in the first composition (the solid `L` of the corpus has id 0x1b).
 pub fn layer_with_id<'f, 'a>(comp: &Comp<'f, 'a>, id: u32) -> Layer<'f, 'a> {
     comp.layers().find(|l| l.id() == Some(id)).unwrap_or_else(|| panic!("no layer with id {id:#x}"))
+}
+
+/// The layer with this user-set name in a composition.
+pub fn layer_named<'f, 'a>(comp: &Comp<'f, 'a>, name: &str) -> Layer<'f, 'a> {
+    comp.layers().find(|l| l.name().as_deref() == Some(name)).unwrap_or_else(|| panic!("no layer named {name}"))
+}
+
+/// The layer that shows this name: its own name, or its source's while it has none.
+pub fn layer_shown_as<'f, 'a>(project: &Project<'f, 'a>, comp: &Comp<'f, 'a>, name: &str) -> Layer<'f, 'a> {
+    comp.layers().find(|l| project.layer_display_name(l).as_deref() == Some(name)).unwrap_or_else(|| panic!("no layer shown as {name}"))
+}
+
+/// The first layer of this type in a composition.
+pub fn layer_of_type<'f, 'a>(comp: &Comp<'f, 'a>, layer_type: LayerType) -> Layer<'f, 'a> {
+    comp.layers().find(|l| l.header().is_some_and(|h| h.layer_type == layer_type)).unwrap_or_else(|| panic!("no {layer_type:?} layer"))
+}
+
+/// Compares floats with a tolerance.
+pub fn near(a: f64, b: f64, tol: f64) -> bool {
+    (a - b).abs() <= tol
+}
+
+pub fn assert_near(got: &[f64], want: &[f64], tol: f64) {
+    assert_eq!(got.len(), want.len(), "{got:?} vs {want:?}");
+    for (g, w) in got.iter().zip(want) {
+        assert!(near(*g, *w, tol), "{got:?} != {want:?}");
+    }
 }

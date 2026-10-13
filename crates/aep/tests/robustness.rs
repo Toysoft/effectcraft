@@ -139,13 +139,15 @@ use effectcraft_aep::{AepFile, Body, Chunk, Comp, Layer, Project, PropGroup, Pro
 /// Touches the property accessors; none may panic on a damaged property.
 fn exercise_property(p: &Property<'_, '_>) {
     let _ = (p.header(), p.dims(), p.is_animated(), p.static_value(), p.time_scale(), p.flags(), p.is_static_flag_set());
-    let _ = (p.expression(), p.expression_flags().map(|f| f.all_set()), p.user_name(), p.first_key_value());
+    let _ = (p.expression(), p.expression_flags().map(|f| (f.all_set(), f.disabled())), p.expression_enabled(), p.user_name(), p.first_key_value());
+    let _ = p.color_argb();
     if let Some(keys) = p.keys() {
         let scale = p.time_scale().unwrap_or(0);
         for k in keys.keyframes() {
             let _ = (k.time_units(), k.spatial_value(), k.raw().len(), k.kind(), k.seconds(scale), k.seconds(0));
             let _ = (k.interpolation_in(), k.interpolation_out(), k.flags(), k.label(), k.is_roving());
-            let _ = (k.scalar_value(), k.ease(), k.spatial());
+            let _ = (k.scalar_value(), k.ease(), k.spatial(), k.components(), k.value(), k.plain_ease_slots());
+            let _ = k.spatial().map(|s| (s.value.len(), s.in_tangent.len(), s.out_tangent.len(), s.ease));
         }
     }
 }
@@ -174,6 +176,20 @@ fn exercise_layer(project: &Project<'_, '_>, comp_size: (u32, u32), layer: &Laye
         let _ = (h.in_point(), h.out_point(), h.in_point_seconds(), h.out_point_seconds(), h.start_seconds(), h.stretch_percent());
         let _ = (h.is_shy(), h.is_locked(), h.is_solo(), h.is_three_d(), h.is_motion_blur(), h.is_adjustment(), h.is_guide());
         let _ = (h.is_null_object(), h.collapses_transformations(), h.name_is_user_set(), h.quality, h.blend_mode, h.layer_type);
+        let _ = (h.is_enabled(), h.is_video_enabled(), h.is_audio_enabled(), h.is_effects_enabled(), h.is_auto_oriented(), h.light_type(), h.blend_mode.code());
+    }
+    let _ = (layer.is_enabled(), layer.is_audio_enabled(), layer.is_effects_enabled());
+    let _ = (layer.camera_position().map(|p| p.reported(comp_size.0, comp_size.1, true)), layer.camera_point_of_interest(), layer.light_intensity());
+    let _ = project.layer_anchor_px(layer);
+    for g in layer.shape_groups() {
+        let _ = (g.name, g.position);
+        for item in g.items {
+            if let effectcraft_aep::ShapeItem::Path { paths, .. } = item {
+                for s in paths {
+                    let _ = s.vertices((1.0, 1.0)).iter().fold(0.0, |acc, v| acc + v.in_tangent()[0] + v.out_tangent()[1]);
+                }
+            }
+        }
     }
     let _ = (project.layer_source(layer).map(|i| i.id()), project.layer_display_name(layer), project.layer_source_size(layer));
     if let Some(t) = layer.transform(comp_size.0, comp_size.1) {
@@ -194,13 +210,16 @@ fn exercise_layer(project: &Project<'_, '_>, comp_size: (u32, u32), layer: &Laye
     for m in layer.masks() {
         let _ = (m.name, m.mode, m.inverted, m.feather, m.opacity_percent, m.expansion, m.path_animated, m.path_key_seconds.len());
         for s in &m.shapes {
-            let _ = (s.vertex_count(), s.vertices((1920.0, 1080.0)).len(), s.vertices((f64::NAN, f64::INFINITY)).len());
+            let _ = (s.vertex_count(), s.vertices((1920.0, 1080.0)).len(), s.vertices((f64::NAN, f64::INFINITY)).len(), s.open);
         }
     }
     if let Some(t) = layer.text_document() {
-        let _ = (t.fill_rgb(), t.fonts.len(), t.text.len(), t.raw_text.len(), t.font_size, t.font);
+        let _ = (t.fill_rgb(), t.fonts.len(), t.text.len(), t.raw_text.len(), t.font_size, t.font.clone(), t.paragraph_texts().len());
+        let _ = (t.paragraphs.iter().fold(0, |acc, p| acc + p.length), t.style_runs.iter().fold(0.0, |acc, r| acc + r.tracking + r.fill_argb[0]), t.text_box);
     }
-    let _ = layer.markers();
+    for m in layer.markers() {
+        let _ = (m.comment.len(), m.chapter.len(), m.url.len(), m.frame_target.len(), m.cue_point_name.len(), m.duration_seconds);
+    }
 }
 
 fn exercise_comp(project: &Project<'_, '_>, comp: &Comp<'_, '_>) {
@@ -211,6 +230,7 @@ fn exercise_comp(project: &Project<'_, '_>, comp: &Comp<'_, '_>) {
     if let Some(h) = comp.header() {
         size = (u32::from(h.width), u32::from(h.height));
         let _ = (h.frame_rate(), h.frame_rate_from_fixed(), h.duration_seconds(), h.work_area_start_seconds(), h.work_area_end_seconds());
+        let _ = (h.frame_rate_exact(), h.duration_frames());
         let _ = (h.background_rgb(), h.pixel_aspect_ratio(), h.pixel_aspect.reduced(), h.shutter_angle, h.motion_blur);
     }
     for layer in comp.layers() {
@@ -255,6 +275,37 @@ const DECODED: &[&str] = &[
     "123-marker-layer-1s.aep",
     "124-precomp-Pre.aep",
     "126-footage-png-layer.aep",
+    "202-key-out-hold-in-linear.aep",
+    "204-key-ease-asymmetric.aep",
+    "205-key-opacity-ease-asymmetric.aep",
+    "206-key-scale-2key-linear.aep",
+    "208-key-mask-feather-2key-linear.aep",
+    "210-key-fill-color-2key-linear.aep",
+    "211-anchor-100x100-solid-10-20.aep",
+    "213-expr-opacity-wiggle-disabled.aep",
+    "214-fx-gaussianblur-default.aep",
+    "215-fx-fill-default.aep",
+    "218-fx-point-111-222.aep",
+    "220-fx-layercontrol-to-layer1.aep",
+    "221-fx-slider-2key.aep",
+    "222-layer-video-off.aep",
+    "228-layer-blend-difference.aep",
+    "229-comp-fps-29.97.aep",
+    "232-mask-ellipse.aep",
+    "233-mask-open-path.aep",
+    "237-mask-mode-difference.aep",
+    "239-shape-stroke-green-w8-round.aep",
+    "240-shape-custom-path-tangents.aep",
+    "241-shape-gradient-fill-linear.aep",
+    "242-shape-group-position-50-50.aep",
+    "245-text-box-400x200-Hello.aep",
+    "248-text-range-fill-red-1-3.aep",
+    "249-marker-layer-full.aep",
+    "251-camera-one-node.aep",
+    "252-light-point.aep",
+    "253-camera-position-100-200-m1000.aep",
+    "254-light-spot-intensity-50.aep",
+    "259-solid-blue-0-0-1.aep",
 ];
 
 #[test]
@@ -332,7 +383,7 @@ fn truncated_typed_files_never_panic() {
 /// The chunks whose bodies the typed view decodes.
 const DECODED_IDS: &[&[u8; 4]] = &[
     b"ldta", b"cdta", b"prin", b"idta", b"idpi", b"tdb4", b"cdat", b"tdsb", b"lhd3", b"ldat", b"mkif", b"shph", b"parn", b"pard", b"sspc", b"opti", b"alas",
-    b"Utf8", b"tdmn", b"NmHd", b"btdk",
+    b"Utf8", b"tdmn", b"NmHd", b"btdk", b"tdpi",
 ];
 
 /// Applies a random mutation to a body.
@@ -428,13 +479,86 @@ fn extreme_values_in_the_decoded_headers() {
     let _ = (h.in_point(), h.in_point_seconds());
     let c = CompHeader::parse(&[0xff; 204]).unwrap();
     assert_eq!((c.duration_seconds(), c.work_area_start_seconds(), c.work_area_end_units), (None, None, None));
-    let _ = (c.frame_rate(), c.frame_rate_from_fixed(), c.background_rgb(), c.pixel_aspect_ratio());
+    let _ = (c.frame_rate(), c.frame_rate_from_fixed(), c.background_rgb(), c.pixel_aspect_ratio(), c.frame_rate_exact());
+    assert_eq!(c.duration_frames(), Some(1));
     let zero = CompHeader::parse(&[0; 204]).unwrap();
     assert_eq!((zero.frame_rate(), zero.pixel_aspect_ratio(), zero.duration_seconds()), (None, None, None));
+    assert_eq!((zero.frame_rate_exact(), zero.duration_frames()), (None, None));
+    let all = LayerHeader::parse(&[0xff; 164]).unwrap();
+    let _ = (all.is_enabled(), all.is_auto_oriented(), all.light_type(), all.blend_mode.code());
+    assert_eq!(LayerHeader::parse(&[0u8; 164]).unwrap().light_type(), None);
     assert_eq!(Rational { num: i64::MAX, den: i64::MIN }.reduced(), None);
     assert_eq!(Rational { num: i64::MIN, den: i64::MIN }.reduced(), Rational::new(1, 1));
     // A path whose point count is not a multiple of three, and non-finite box and scale.
     let path = ShapePath { bbox: [f32::NAN, f32::INFINITY, f32::MIN, f32::MAX], closed_flag: 9, open: true, points: vec![[f32::NAN, 0.0]; 7] };
     assert_eq!(path.vertex_count(), 2);
     assert_eq!(path.vertices((f64::NAN, f64::MAX)).len(), 2);
+}
+
+/// Calls `f` on the body of every data chunk with this id, anywhere in the tree.
+fn for_each_body(chunks: &mut [Chunk<'static>], id: &[u8; 4], f: &mut dyn FnMut(&mut Vec<u8>), depth: usize) {
+    if depth > 70 {
+        return;
+    }
+    for chunk in chunks {
+        let this = chunk.id;
+        match &mut chunk.body {
+            Body::Data(d) if this == *id => f(d.to_mut()),
+            Body::Data(_) | Body::OpaqueList { .. } => {}
+            Body::Chunks(c) | Body::List { children: c, .. } => for_each_body(c, id, f, depth + 1),
+        }
+    }
+}
+
+#[test]
+fn hostile_keyframe_layouts_never_panic() {
+    // The property header selects the record template: every component count (0..=255) with the
+    // template flag at 0, 1 and 0xff, over keyframe lists of every record size in these fixtures.
+    for name in [
+        "204-key-ease-asymmetric.aep",
+        "206-key-scale-2key-linear.aep",
+        "208-key-mask-feather-2key-linear.aep",
+        "210-key-fill-color-2key-linear.aep",
+        "093-mask-path-2keys.aep",
+        "122-marker-comp-1s.aep",
+    ] {
+        let bytes = fixture(name);
+        let original = parse(&bytes).unwrap().into_owned();
+        for components in 0..=255u8 {
+            for template in [0u8, 1, 0xff] {
+                let mut file = original.clone();
+                for_each_body(
+                    &mut file.chunks,
+                    b"tdb4",
+                    &mut |body| {
+                        if body.len() > 7 {
+                            body[3] = components;
+                            body[7] = template;
+                        }
+                    },
+                    0,
+                );
+                exercise(&file);
+            }
+        }
+    }
+}
+
+#[test]
+fn hostile_text_dictionaries_and_marker_headers_never_panic() {
+    // Damage the marker header (NmHd), the strings and the layer reference in many ways, and the
+    // opaque text lists.
+    for name in ["245-text-box-400x200-Hello.aep", "248-text-range-fill-red-1-3.aep", "249-marker-layer-full.aep", "220-fx-layercontrol-to-layer1.aep"] {
+        let bytes = fixture(name);
+        let original = parse(&bytes).unwrap().into_owned();
+        let mut rng = Rng(0x07e4_70dd_ba11 ^ bytes.len() as u64);
+        for _ in 0..300 {
+            let mut file = original.clone();
+            for id in [b"NmHd", b"Utf8", b"tdpi"] {
+                for_each_body(&mut file.chunks, id, &mut |body| damage(body, &mut rng), 0);
+            }
+            damage_tree(&mut file.chunks, &mut rng, 0);
+            exercise(&file);
+        }
+    }
 }

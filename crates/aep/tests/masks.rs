@@ -132,3 +132,73 @@ fn shape_path_maths_with_a_pixel_box_and_tangents() {
     assert_eq!(v[2].out_handle, [-100.0, 100.0]);
     assert!(ShapePath { bbox: [0.0; 4], closed_flag: 0, open: false, points: Vec::new() }.vertices((1.0, 1.0)).is_empty());
 }
+
+// ---------------------------------------------------------------------------- batch 2
+
+fn near2(got: [f64; 2], want: [f64; 2], tol: f64) {
+    assert!((got[0] - want[0]).abs() < tol && (got[1] - want[1]).abs() < tol, "{got:?} != {want:?}");
+}
+
+#[test]
+fn mask_mode_ids() {
+    // 090 Add 1, 091 Subtract 2, 234 Intersect 3, 235 Lighten 4, 236 Darken 5, 237 Difference 6.
+    for (name, mode, id) in [
+        ("090-mask-rect.aep", MaskMode::Add, 1),
+        ("091-mask-rect-props.aep", MaskMode::Subtract, 2),
+        ("234-mask-mode-intersect.aep", MaskMode::Intersect, 3),
+        ("235-mask-mode-lighten.aep", MaskMode::Lighten, 4),
+        ("236-mask-mode-darken.aep", MaskMode::Darken, 5),
+        ("237-mask-mode-difference.aep", MaskMode::Difference, 6),
+    ] {
+        let m = masks(name);
+        assert_eq!(m.len(), 1, "{name}");
+        assert_eq!(m[0].mode, Some(mode), "{name}");
+        assert_eq!(MaskMode::from_id(id), mode);
+        assert_eq!(m[0].name.as_deref(), Some("Mask 1"));
+        assert_eq!(m[0].shapes.len(), 1);
+        assert!(!m[0].shapes[0].open);
+    }
+    assert_eq!(MaskMode::from_id(0), MaskMode::Other(0));
+    assert_eq!(MaskMode::from_id(9), MaskMode::Other(9));
+}
+
+#[test]
+fn ellipse_has_tangents_of_0_5523_times_the_radius() {
+    // 232: ellipse 800x400 at [960,540]: vertices [960,340] [1360,540] [960,740] [560,540]; in tangents
+    // [-220.91,0] [0,-110.457] [220.91,0] [0,110.457]; out tangents the opposite ones; closed.
+    let m = masks("232-mask-ellipse.aep");
+    let shape = &m[0].shapes[0];
+    assert!(!shape.open);
+    assert_eq!(shape.vertex_count(), 4);
+    let v = shape.vertices(SIZE);
+    let vertices = [[960.0, 340.0], [1360.0, 540.0], [960.0, 740.0], [560.0, 540.0]];
+    let in_tangents = [[-220.913_879, 0.0], [0.0, -110.456_97], [220.913_94, 0.0], [0.0, 110.456_97]];
+    let out_tangents = [[220.913_94, 0.0], [0.0, 110.456_97], [-220.913_879, 0.0], [0.0, -110.456_97]];
+    for i in 0..4 {
+        near2(v[i].position, vertices[i], 1e-3);
+        near2(v[i].in_tangent(), in_tangents[i], 1e-2);
+        near2(v[i].out_tangent(), out_tangents[i], 1e-2);
+        // Tangent = handle minus vertex.
+        near2(v[i].in_handle, [v[i].position[0] + v[i].in_tangent()[0], v[i].position[1] + v[i].in_tangent()[1]], 1e-9);
+    }
+    // The box is the vertex box 560,340,1360,740 (normalised to the 1920x1080 layer).
+    let [l, t, r, b] = shape.bbox.map(f64::from);
+    near2([l * SIZE.0, t * SIZE.1], [560.0, 340.0], 1e-2);
+    near2([r * SIZE.0, b * SIZE.1], [1360.0, 740.0], 1e-2);
+}
+
+#[test]
+fn open_path_has_bit_8_in_the_shph_flags() {
+    // 233: three vertices [500,300] [960,700] [1400,300], closed=false, no tangents.
+    let m = masks("233-mask-open-path.aep");
+    let shape = &m[0].shapes[0];
+    assert!(shape.open);
+    assert_eq!(shape.closed_flag, 1);
+    assert_eq!(shape.vertex_count(), 3);
+    assert_points(&shape.vertices(SIZE), &[[500.0, 300.0], [960.0, 700.0], [1400.0, 300.0]]);
+    assert_eq!(m[0].mode, Some(MaskMode::Add));
+    // The closed paths of the same session have the bit clear.
+    for name in ["232-mask-ellipse.aep", "234-mask-mode-intersect.aep"] {
+        assert!(!masks(name)[0].shapes[0].open, "{name}");
+    }
+}

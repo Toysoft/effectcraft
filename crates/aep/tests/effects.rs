@@ -115,3 +115,114 @@ fn drop_shadow_defaults_come_from_pard() {
         assert_eq!(p[1].value(), Some(ParamValue::Argb([1.0, 0.0, 0.0, 0.0])));
     });
 }
+
+// ---------------------------------------------------------------------------- batch 2 (defaults and values)
+
+fn param<'f, 'a>(e: &Effect<'f, 'a>, name: &str) -> effectcraft_aep::EffectParam<'f, 'a> {
+    e.params().into_iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no parameter {name}"))
+}
+
+#[test]
+fn gaussian_blur_default_is_the_pard_default_25() {
+    // 214: Gaussian Blur, all parameters default. The file has no value record and a pard default of 25
+    // (the manifest says 0; the files only ever contain 25, see docs/aep-format.md).
+    with_effect("214-fx-gaussianblur-default.aep", |e| {
+        assert_eq!(e.match_name(), "ADBE Gaussian Blur 2");
+        let blur = param(e, "Blurriness");
+        assert_eq!(blur.kind, ParamKind::FloatSlider);
+        assert!(blur.stored().is_none());
+        assert_eq!(blur.stored_value(), None);
+        assert_eq!(blur.value(), Some(ParamValue::Number(25.0)));
+        assert_eq!(f64::from_be_bytes(blur.pard()[56..64].try_into().unwrap()), 25.0);
+        assert_eq!(f32::from_be_bytes(blur.pard()[120..124].try_into().unwrap()), 25.0);
+        // Dimensions: Horizontal and Vertical (the first item of the popup); Repeat Edge Pixels: off.
+        let dims = param(e, "Blur Dimensions");
+        assert_eq!(dims.kind, ParamKind::Popup);
+        assert_eq!(dims.value(), Some(ParamValue::Index(1)));
+        assert_eq!(dims.items.as_ref().and_then(|i| i.first()).map(String::as_str), Some("Horizontal and Vertical"));
+        // The last parameter is the Repeat Edge Pixels checkbox (its label is not in pard).
+        let edge = &e.params()[3];
+        assert_eq!(edge.kind, ParamKind::Checkbox);
+        assert!(edge.stored().is_none());
+        assert_eq!(edge.value(), Some(ParamValue::Bool(false)));
+    });
+}
+
+#[test]
+fn gaussian_blur_40_adds_a_value_record_and_leaves_pard_at_the_default() {
+    // 216: Blurriness 40.
+    with_effect("216-fx-gaussianblur-40.aep", |e| {
+        let blur = param(e, "Blurriness");
+        assert_eq!(blur.stored().unwrap().flags(), Some(1));
+        assert_eq!(blur.stored_value(), Some(ParamValue::Number(40.0)));
+        assert_eq!(blur.value(), Some(ParamValue::Number(40.0)));
+        // pard holds the default, not the current value.
+        assert_eq!(blur.pard_default(), Some(ParamValue::Number(25.0)));
+    });
+}
+
+#[test]
+fn fill_defaults_come_from_pard() {
+    // 215: Fill with the default colour (red) and opacity (100 %); the file has no value records for them.
+    with_effect("215-fx-fill-default.aep", |e| {
+        assert_eq!(e.match_name(), "ADBE Fill");
+        let color = param(e, "Color");
+        assert_eq!(color.kind, ParamKind::Color);
+        assert!(color.stored().is_none());
+        assert_eq!(&color.pard()[56..60], [0xff, 0xff, 0x00, 0x00]);
+        assert_eq!(color.value(), Some(ParamValue::Argb([1.0, 1.0, 0.0, 0.0])));
+        let opacity = param(e, "Opacity");
+        assert_eq!(opacity.kind, ParamKind::FixedSlider);
+        assert!(opacity.stored().is_none());
+        assert_eq!(opacity.value(), Some(ParamValue::Number(1.0)));
+    });
+}
+
+#[test]
+fn checkbox_point_and_angle_values() {
+    // 217: Checkbox 0 -> 1 (stored 1.0).
+    with_effect("217-fx-checkbox-on.aep", |e| {
+        let p = param(e, "Checkbox");
+        assert_eq!(p.kind, ParamKind::Checkbox);
+        assert_eq!(p.stored_value(), Some(ParamValue::Bool(true)));
+        assert_eq!(p.value(), Some(ParamValue::Bool(true)));
+        assert_eq!(p.stored().unwrap().static_value(), Some(vec![1.0]));
+    });
+    // 218: Point -> [111, 222], stored as a fraction of the layer size (the layer is 1920x1080).
+    with_effect("218-fx-point-111-222.aep", |e| {
+        let p = param(e, "Point");
+        assert_eq!(p.kind, ParamKind::Point);
+        let Some(ParamValue::Point([x, y])) = p.value() else { panic!("{:?}", p.value()) };
+        assert!((x - 111.0 / 1920.0).abs() < 1e-12 && (y - 222.0 / 1080.0).abs() < 1e-12, "{x} {y}");
+        assert!((x * 1920.0 - 111.0).abs() < 1e-9 && (y * 1080.0 - 222.0).abs() < 1e-9);
+    });
+    // 219: Angle -> 90, stored as plain degrees.
+    with_effect("219-fx-angle-90.aep", |e| {
+        let p = param(e, "Angle");
+        assert_eq!(p.kind, ParamKind::Angle);
+        assert_eq!(p.stored_value(), Some(ParamValue::Number(90.0)));
+        assert_eq!(p.value(), Some(ParamValue::Number(90.0)));
+    });
+}
+
+#[test]
+fn layer_control_refers_to_a_layer_by_id() {
+    // 220: a new Null on top (layer index 1); L (now index 2) gets a Layer Control with Layer = 1: the tdpi
+    // next to the value record holds the id of the Null.
+    let bytes = fixture("220-fx-layercontrol-to-layer1.aep");
+    let file = open(&bytes);
+    let project = Project::new(&file).unwrap();
+    let comp = first_comp(&project);
+    let null = comp.layers().next().unwrap();
+    let null_id = null.id().unwrap();
+    assert_eq!(null_id, 0x22);
+    assert!(null.header().unwrap().is_null_object());
+    let layer = layer_with_id(&comp, L);
+    let e = &layer.effects()[0];
+    assert_eq!(e.match_name(), "ADBE Layer Control");
+    let p = param(e, "Layer");
+    assert_eq!(p.kind, ParamKind::Layer);
+    assert_eq!(p.stored_value(), Some(ParamValue::Layer(null_id)));
+    // The implicit input layer parameter refers to the layer that owns the effect.
+    assert_eq!(e.params()[0].stored_value(), Some(ParamValue::Layer(L)));
+}
