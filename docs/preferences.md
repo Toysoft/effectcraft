@@ -203,6 +203,12 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   active context, then the panel with the keyboard, then the application. The Timeline and the
   Composition panel share their shortcuts. A context's shortcuts work only while it is active;
   a panel's shortcut that nothing nearer claims still works from the other panels.
+- **Contexts.** *Text Editing*: the formatting shortcuts of the text being edited in a viewer
+  (`text.format.*`: alignment and justification, All Caps, Small Caps, super- and subscript,
+  font size ±2 / ±10, leading, baseline shift, kerning / tracking, scale 100%, Auto Leading,
+  the paragraph composer). *Mask*: with a mask selected (the mask, not one of its properties)
+  N, A, S, I, D and F set its mode. *Paint*: with a paint tool X swaps the colours, D makes
+  them black and white, and 3–7 pick a Clone Stamp preset.
 - **Numeric keypad.** The windowing layer reports a keypad key as its main-keyboard key, so
   `Num0` is also the main `0`; only `Num*` is told apart (it arrives as text). The shortcuts
   that need a keypad key have main-keyboard keys on macOS, where Control is a key of its own:

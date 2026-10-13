@@ -17,11 +17,20 @@ pub struct UiCommand {
     pub label: &'static str,
     pub menu: &'static [&'static str],
     pub shortcut: Option<&'static str>,
+    /// Shortcut scope; none: from the id (`timeline.*`, `view.*`), else the application.
+    pub scope: Option<&'static str>,
 }
 
 macro_rules! uic {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr) => {
-        UiCommand { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc }
+        UiCommand { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, scope: None }
+    };
+}
+
+/// A UI-only command whose shortcut works in one panel or context only.
+macro_rules! uis {
+    ($id:literal, $label:literal, $scope:literal, $sc:expr) => {
+        UiCommand { id: $id, label: $label, menu: &[], shortcut: $sc, scope: Some($scope) }
     };
 }
 
@@ -138,6 +147,38 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("window.floatPanel", "Undock Panel", [], None),
     uic!("window.closePanel", "Close Panel", [], None),
     uic!("window.panelWindow", "Move Panel to New Window", [], None),
+    // The formatting shortcuts of the text being edited in a viewer.
+    uis!("text.format.alignLeft", "Align Text Left / Top", "TextEditing", Some("Cmd+Shift+L")),
+    uis!("text.format.alignCenter", "Align Text Center", "TextEditing", Some("Cmd+Shift+C")),
+    uis!("text.format.alignRight", "Align Text Right / Bottom", "TextEditing", Some("Cmd+Shift+R")),
+    uis!("text.format.justifyLeft", "Justify Text, Last Line Left", "TextEditing", Some("Cmd+Shift+J")),
+    uis!("text.format.justifyRight", "Justify Text, Last Line Right", "TextEditing", Some("Cmd+Alt+Shift+J")),
+    uis!("text.format.justifyAll", "Justify Text, Force Last Line", "TextEditing", Some("Cmd+Shift+F")),
+    uis!("text.format.allCaps", "All Caps", "TextEditing", Some("Cmd+Shift+K")),
+    uis!("text.format.smallCaps", "Small Caps", "TextEditing", Some("Cmd+Alt+Shift+K")),
+    uis!("text.format.superscript", "Superscript", "TextEditing", Some("Cmd+Shift+=")),
+    uis!("text.format.subscript", "Subscript", "TextEditing", Some("Cmd+Alt+Shift+=")),
+    uis!("text.format.horizontalScale100", "Set Horizontal Scale to 100%", "TextEditing", Some("Cmd+Shift+X")),
+    uis!("text.format.verticalScale100", "Set Vertical Scale to 100%", "TextEditing", Some("Cmd+Alt+Shift+X")),
+    uis!("text.format.autoLeading", "Auto Leading", "TextEditing", Some("Cmd+Alt+Shift+A")),
+    uis!("text.format.tracking0", "Reset Tracking to 0", "TextEditing", Some("Cmd+Shift+Q")),
+    uis!("text.format.size-2", "Decrease Font Size by 2", "TextEditing", Some("Cmd+Shift+,")),
+    uis!("text.format.size2", "Increase Font Size by 2", "TextEditing", Some("Cmd+Shift+.")),
+    uis!("text.format.size-10", "Decrease Font Size by 10", "TextEditing", Some("Cmd+Alt+Shift+,")),
+    uis!("text.format.size10", "Increase Font Size by 10", "TextEditing", Some("Cmd+Alt+Shift+.")),
+    uis!("text.format.leading2", "Increase Leading by 2", "TextEditing", Some("Alt+ArrowDown")),
+    uis!("text.format.leading-2", "Decrease Leading by 2", "TextEditing", Some("Alt+ArrowUp")),
+    uis!("text.format.leading10", "Increase Leading by 10", "TextEditing", Some("Cmd+Alt+ArrowDown")),
+    uis!("text.format.leading-10", "Decrease Leading by 10", "TextEditing", Some("Cmd+Alt+ArrowUp")),
+    uis!("text.format.baseline-2", "Decrease Baseline Shift by 2", "TextEditing", Some("Alt+Shift+ArrowDown")),
+    uis!("text.format.baseline2", "Increase Baseline Shift by 2", "TextEditing", Some("Alt+Shift+ArrowUp")),
+    uis!("text.format.baseline-10", "Decrease Baseline Shift by 10", "TextEditing", Some("Cmd+Alt+Shift+ArrowDown")),
+    uis!("text.format.baseline10", "Increase Baseline Shift by 10", "TextEditing", Some("Cmd+Alt+Shift+ArrowUp")),
+    uis!("text.format.tracking-20", "Decrease Kerning or Tracking by 20", "TextEditing", Some("Alt+ArrowLeft")),
+    uis!("text.format.tracking20", "Increase Kerning or Tracking by 20", "TextEditing", Some("Alt+ArrowRight")),
+    uis!("text.format.tracking-100", "Decrease Kerning or Tracking by 100", "TextEditing", Some("Cmd+Alt+ArrowLeft")),
+    uis!("text.format.tracking100", "Increase Kerning or Tracking by 100", "TextEditing", Some("Cmd+Alt+ArrowRight")),
+    uis!("text.format.composer", "Toggle Paragraph Composer", "TextEditing", Some("Cmd+Alt+Shift+T")),
 ];
 
 pub fn panel_command_id(p: PanelKind) -> String {
@@ -595,6 +636,9 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             app.ui.viewer.fit_up_to_100 = false;
             app.ui.viewer.pan = [0.0, 0.0];
             return Ok(Value::Null);
+        }
+        id if id.starts_with("text.format.") => {
+            return crate::panels::text_panels::format(app, ctx, id.trim_start_matches("text.format."));
         }
         "timeline.scrollToTime" => app.ui.timeline.scroll_to = Some(crate::state::ScrollTo::Time),
         "timeline.scrollToLayer" => app.ui.timeline.scroll_to = Some(crate::state::ScrollTo::Layer),
@@ -1765,13 +1809,26 @@ pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
         Tool::Orbit | Tool::PanCamera | Tool::Dolly => out.push("Camera"),
         _ => {}
     }
-    if app.session.selected_mask().is_some() {
+    // (The mask itself, not one of its properties: with Mask Path selected the letters stay
+    // the Timeline's reveal keys.)
+    if app.session.selected_mask().is_some_and(|m| app.session.state.selected_props.contains(&m)) {
         out.push("Mask");
     }
     if matches!(app.ui.focused, PanelKind::Composition | PanelKind::Layer | PanelKind::Footage | PanelKind::Viewer(_)) {
         out.push("Viewer");
     }
     out
+}
+
+/// The command the active preset binds to `key` + `mods` in the context `scope`: for the code
+/// that owns the keyboard while that context is active (text being edited takes its keys itself).
+pub fn context_binding(app: &EffectcraftApp, scope: &str, key: egui::Key, mods: egui::Modifiers) -> Option<String> {
+    let table = app.session.shortcuts();
+    bindings(&app.session)
+        .into_iter()
+        .filter(|(m, k, ..)| *k == key && mods_match(*m, mods))
+        .find(|(_, _, id, params)| table.find(&effectcraft_engine::shortcuts::binding_key(id, params)).is_some_and(|b| b.scope == scope))
+        .map(|(_, _, id, _)| id)
 }
 
 /// Only Shift held (Shift+Delete, not Ctrl/Alt+Shift+Delete).

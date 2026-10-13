@@ -888,3 +888,26 @@ fn numeric_keypad_shortcuts_have_main_keyboard_keys_on_macos() {
     assert_eq!(t.keys["playback.preview.altNumpad0"], preview);
     assert!(t.all_conflicts().is_empty(), "{:?}", t.all_conflicts());
 }
+
+#[test]
+fn mask_and_paint_keys_live_in_their_contexts() {
+    let mut s = Session::default();
+    let t = s.shortcuts();
+    for (mode, key) in [("None", "N"), ("Add", "A"), ("Subtract", "S"), ("Intersect", "I"), ("Darken", "D"), ("Difference", "F")] {
+        let b = t.find(&format!(r#"layer.mask.mode {{"mode":"{mode}"}}"#)).unwrap();
+        assert_eq!((b.scope.as_str(), t.keys[&b.key].as_slice()), ("Mask", &[key.to_string()][..]), "{mode}");
+    }
+    for (id, key) in [("paint.swapColors", "X"), ("paint.defaultColors", "D"), ("paint.clonePreset1", "3"), ("paint.clonePreset5", "7")] {
+        let b = t.find(id).unwrap();
+        assert_eq!((b.scope.as_str(), t.keys[id].as_slice()), ("Paint", &[key.to_string()][..]), "{id}");
+    }
+    assert!(t.all_conflicts().is_empty(), "{:?}", t.all_conflicts());
+
+    s.execute("paint.options", json!({"color": [1, 0, 0, 1], "background": [0, 0, 1, 1]})).unwrap();
+    s.execute("paint.swapColors", json!({})).unwrap();
+    assert_eq!((s.state.paint.color, s.state.paint.background), ([0.0, 0.0, 1.0, 1.0], [1.0, 0.0, 0.0, 1.0]));
+    s.execute("paint.defaultColors", json!({})).unwrap();
+    assert_eq!((s.state.paint.color, s.state.paint.background), ([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]));
+    s.execute("paint.clonePreset4", json!({})).unwrap();
+    assert_eq!(s.state.paint.clone_preset, 4);
+}

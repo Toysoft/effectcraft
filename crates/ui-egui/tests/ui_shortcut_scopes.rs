@@ -117,3 +117,42 @@ fn ctrl_8_adds_a_marker_like_numpad_multiply() {
     press(&mut app, Key::Num8, Modifiers::CTRL);
     assert_eq!((layer_markers(&app), comp_markers(&app)), (1, 1));
 }
+
+/// With a paint tool X swaps the paint colours; otherwise it is the Timeline's key.
+#[test]
+fn paint_keys_work_only_with_a_paint_tool() {
+    let mut app = app();
+    app.ui.focused = PanelKind::Composition;
+    app.session.execute("paint.options", json!({"color": [1, 0, 0, 1], "background": [0, 0, 1, 1]})).unwrap();
+    press(&mut app, Key::X, Modifiers::NONE);
+    assert_eq!(app.session.state.paint.color, [1.0, 0.0, 0.0, 1.0], "the Selection tool: not a paint key");
+    app.ui.tool = effectcraft_ui_egui::state::Tool::Brush;
+    press(&mut app, Key::X, Modifiers::NONE);
+    assert_eq!(app.session.state.paint.color, [0.0, 0.0, 1.0, 1.0]);
+    press(&mut app, Key::D, Modifiers::NONE);
+    assert_eq!(app.session.state.paint.color, [0.0, 0.0, 0.0, 1.0]);
+}
+
+/// With a mask selected its mode has single-letter keys; with one of its properties selected
+/// (or nothing) the letters stay the Timeline's reveal keys.
+#[test]
+fn mask_mode_keys_work_only_with_a_mask_selected() {
+    let mut app = app();
+    app.ui.focused = PanelKind::Timeline;
+    app.session.execute("edit.selectAll", json!({})).unwrap();
+    app.session.execute("layer.addMask", json!({})).unwrap();
+    let mode = |app: &EffectcraftApp| {
+        let c = app.session.active_comp().unwrap();
+        let l = c.layers.iter().find(|l| l.masks().is_some_and(|m| m.groups().next().is_some())).unwrap();
+        format!("{:?}", l.masks().unwrap().groups().next().unwrap().kind)
+    };
+    let added = mode(&app);
+    app.session.state.selected_props.clear();
+    press(&mut app, Key::S, Modifiers::NONE);
+    assert_eq!(mode(&app), added, "no mask selected: S reveals Scale");
+    app.session.execute("layer.mask.selectNext", json!({})).unwrap();
+    press(&mut app, Key::S, Modifiers::NONE);
+    assert!(mode(&app).contains("Subtract"), "{}", mode(&app));
+    press(&mut app, Key::I, Modifiers::NONE);
+    assert!(mode(&app).contains("Intersect"), "{}", mode(&app));
+}

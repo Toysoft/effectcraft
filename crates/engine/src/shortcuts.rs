@@ -52,11 +52,24 @@ const SCOPES: &[(&str, &str)] = &[
     ("project.deleteWithoutConfirmation", "Project"),
     ("renderQueue.duplicate", "RenderQueue"),
     ("view.newViewer", "Viewer"),
+    // The mode of the selected mask: single letters, the Timeline's reveal keys otherwise.
+    ("layer.mask.mode", "Mask"),
+    // With a paint tool: the colours and the Clone Stamp presets.
+    ("paint.swapColors", "Paint"),
+    ("paint.defaultColors", "Paint"),
+    ("paint.clonePreset1", "Paint"),
+    ("paint.clonePreset2", "Paint"),
+    ("paint.clonePreset3", "Paint"),
+    ("paint.clonePreset4", "Paint"),
+    ("paint.clonePreset5", "Paint"),
 ];
 
-/// Scope of an engine command or menu entry from its binding key.
+/// Scope of an engine command or menu entry from its binding key (`command` or
+/// `command {params}`): the key's own entry, else its command's.
 pub fn scope_of(key: &str) -> &'static str {
-    SCOPES.iter().find(|(k, _)| *k == key).map_or(APP_SCOPE, |(_, s)| s)
+    let command = key.split_once(' ').map_or(key, |(c, _)| c);
+    let find = |k: &str| SCOPES.iter().find(|(s, _)| *s == k).map(|(_, s)| *s);
+    find(key).or_else(|| find(command)).unwrap_or(APP_SCOPE)
 }
 
 pub fn is_context(scope: &str) -> bool {
