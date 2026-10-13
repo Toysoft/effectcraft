@@ -11,15 +11,39 @@ use crate::bytes::{be_f32, be_u32};
 use crate::typed::{KeyList, Layer, PropGroup, PropNode, Property};
 use crate::values::{Tracked, read};
 
-/// The mask mode (`mkif` `u32` at byte 4). Only Add and Subtract were sampled.
+/// The mask mode (`mkif` `u32` at byte 4). The mode None was not sampled and is kept as its raw
+/// value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaskMode {
     /// `1`
     Add,
     /// `2`
     Subtract,
+    /// `3`
+    Intersect,
+    /// `4`
+    Lighten,
+    /// `5`
+    Darken,
+    /// `6`
+    Difference,
     /// Any other value (not sampled).
     Other(u32),
+}
+
+impl MaskMode {
+    /// The mode for a stored id.
+    pub fn from_id(id: u32) -> Self {
+        match id {
+            1 => Self::Add,
+            2 => Self::Subtract,
+            3 => Self::Intersect,
+            4 => Self::Lighten,
+            5 => Self::Darken,
+            6 => Self::Difference,
+            other => Self::Other(other),
+        }
+    }
 }
 
 /// A vertex of a bezier path with its two control points as absolute positions.
@@ -32,21 +56,36 @@ pub struct PathVertex {
     pub out_handle: [f64; 2],
 }
 
+impl PathVertex {
+    /// The in tangent: the in handle minus the vertex (what the scripting API calls `inTangents`).
+    pub fn in_tangent(&self) -> [f64; 2] {
+        [self.in_handle[0] - self.position[0], self.in_handle[1] - self.position[1]]
+    }
+
+    /// The out tangent: the out handle minus the vertex (`outTangents`).
+    pub fn out_tangent(&self) -> [f64; 2] {
+        [self.out_handle[0] - self.position[0], self.out_handle[1] - self.position[1]]
+    }
+}
+
 /// One path shape (`LIST shap`): a bounding box and the control points normalised inside it.
 ///
-/// The `shph` chunk holds a magic word, the box (left, top, right, bottom) as four `f32`, and the
-/// byte at offset 20 (`1` in every closed path sampled). The `list` holds three points per vertex,
-/// each as two `f32` in [0, 1] of the box, in the order `[vertex i, out handle i, in handle i + 1]`;
-/// the last record is the in handle of vertex 0. For masks the box is normalised to the layer size;
-/// for the paths of shape layers it is in pixels. Handles equal their vertex when a vertex has no
-/// tangents; the order is verified only for such paths (tangents of curved vertices were not
-/// sampled, so the sign and length of a tangent are unverified).
+/// The `shph` chunk holds a magic word whose last byte carries the flags (`0x01` closed, `0x09` open:
+/// bit `0x08`), the box (left, top, right, bottom) as four `f32`, and the byte at offset 20 (`1` in
+/// every sample). The box is the box of the vertices **and** their handles. The `list` holds three
+/// points per vertex, each as two `f32` in [0, 1] of the box, in the order `[vertex i, out handle i,
+/// in handle i + 1]`; the last record is the in handle of vertex 0. For masks the box is normalised
+/// to the layer size (whether the layer's or the composition's size is not decided: both were
+/// 1920x1080); for the paths of shape layers it is in pixels. Handles equal their vertex when a
+/// vertex has no tangents; a tangent is the handle minus the vertex, without a sign change.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapePath {
     /// Left, top, right, bottom.
     pub bbox: [f32; 4],
-    /// The byte at offset 20 of `shph` (`1` for a closed path; open paths were not sampled).
+    /// The byte at offset 20 of `shph` (`1` in every sample, also for the open path).
     pub closed_flag: u8,
+    /// True for an open path: bit `0x08` of the last byte of the first `shph` word.
+    pub open: bool,
     /// The normalised points as stored, three per vertex.
     pub points: Vec<[f32; 2]>,
 }
@@ -57,12 +96,13 @@ impl ShapePath {
         let shph = shap.child(b"shph")?.bytes()?;
         let bbox = [be_f32(shph, 4)?, be_f32(shph, 8)?, be_f32(shph, 12)?, be_f32(shph, 16)?];
         let closed_flag = *shph.get(20)?;
+        let open = shph.get(3)? & 0x08 != 0;
         let list = KeyList::from_chunk(shap.child_list(b"list")?)?;
         if list.header.record_size != 8 {
             return None;
         }
         let points = list.records().map(|r| Some([be_f32(r, 0)?, be_f32(r, 4)?])).collect::<Option<Vec<_>>>()?;
-        Some(Self { bbox, closed_flag, points })
+        Some(Self { bbox, closed_flag, open, points })
     }
 
     /// The number of vertices (`points / 3`).
@@ -124,11 +164,7 @@ fn mask_from_atom(atom: &PropGroup<'_, '_>, mkif: Option<&[u8]>) -> Mask {
     let expansion = read(atom, "ADBE Mask Offset", [0.0], 1.0);
     let mut mask = Mask {
         name: atom.user_name(),
-        mode: mkif.and_then(|m| be_u32(m, 4)).map(|m| match m {
-            1 => MaskMode::Add,
-            2 => MaskMode::Subtract,
-            other => MaskMode::Other(other),
-        }),
+        mode: mkif.and_then(|m| be_u32(m, 4)).map(MaskMode::from_id),
         inverted: mkif.and_then(|m| m.first()).map(|b| *b != 0),
         feather: read(atom, "ADBE Mask Feather", [0.0, 0.0], 1.0),
         opacity_percent: Tracked { value: opacity.value[0], source: opacity.source },

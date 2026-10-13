@@ -52,8 +52,8 @@ fn slider_control_with_a_stored_value() {
         assert_eq!(params[1].value(), Some(ParamValue::Number(77.0)));
         // The pard default of the slider is 0 (070 has the untouched control).
         assert_eq!(params[1].pard_default(), Some(ParamValue::Number(0.0)));
-        // The input layer parameter has a value record of its own that is not a number.
-        assert_eq!(params[0].stored_value(), None);
+        // The input layer parameter has a value record of its own: its `tdpi` holds the id of the layer that owns the effect.
+        assert_eq!(params[0].stored_value(), Some(ParamValue::Layer(0x1b)));
         assert_eq!(params[0].pard().len(), 148);
     });
 }
@@ -110,8 +110,8 @@ fn drop_shadow_defaults_come_from_pard() {
         approx(p[3].value(), 135.0);
         approx(p[4].value(), 5.0);
         approx(p[5].value(), 0.0);
-        // Checkbox and colour defaults are not decoded.
-        assert_eq!(p[6].value(), None);
-        assert_eq!(p[1].value(), None);
+        // A checkbox without a record is off; the shadow colour default (ARGB bytes in pard) is black.
+        assert_eq!(p[6].value(), Some(ParamValue::Bool(false)));
+        assert_eq!(p[1].value(), Some(ParamValue::Argb([1.0, 0.0, 0.0, 0.0])));
     });
 }

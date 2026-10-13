@@ -14,6 +14,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod bytes;
+mod camera;
 mod chunk;
 mod effects;
 mod error;
@@ -22,20 +23,23 @@ mod header;
 mod keys;
 mod masks;
 mod read;
+mod shapes;
 mod textdoc;
 mod typed;
 mod values;
 mod write;
 
+pub use camera::CameraPosition;
 pub use chunk::{AepFile, Body, Chunk, LIST, NESTED_IDS, Walk};
 pub use effects::{Effect, EffectParam, ParamKind, ParamValue};
 pub use error::AepError;
 pub use footage::Footage;
-pub use header::{BlendMode, CompHeader, LayerHeader, LayerType, Quality, Rational, Renderer};
-pub use keys::{ExpressionFlags, Interpolation, KeyframeKind, SpatialKey};
+pub use header::{BlendMode, CompHeader, LayerHeader, LayerType, LightType, Quality, Rational, Renderer};
+pub use keys::{ExpressionFlags, Interpolation, KeyEase, KeyframeKind, SpatialKey};
 pub use masks::{Mask, MaskMode, PathVertex, ShapePath};
 pub use read::{Limits, parse, parse_with_limits};
-pub use textdoc::{Marker, TextDocument, TextValue, parse_text_dict};
-pub use typed::{Comp, Item, ItemKind, KeyList, Keyframe, Layer, ListHeader, Project, PropEntry, PropGroup, PropNode, Property, TimeBase};
+pub use shapes::{ShapeGroup, ShapeItem, Stroke, StrokeCap, StrokeJoin};
+pub use textdoc::{Justification, Marker, ParagraphRun, StyleRun, TextBox, TextDocument, TextValue, parse_text_dict};
+pub use typed::{Comp, Item, ItemKind, KeyLayout, KeyList, Keyframe, Layer, ListHeader, Project, PropEntry, PropGroup, PropNode, Property, TimeBase};
 pub use values::{Tracked, Transform, ValueSource};
 pub use write::{write, write_to};

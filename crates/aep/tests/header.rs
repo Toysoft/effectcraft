@@ -188,9 +188,9 @@ fn parent_link_and_null_object() {
 
 #[test]
 fn layer_header_is_none_when_ldta_is_too_short() {
-    assert!(LayerHeader::parse(&[0; 135]).is_none());
+    assert!(LayerHeader::parse(&[0; 139]).is_none());
     assert!(LayerHeader::parse(&[]).is_none());
-    assert!(LayerHeader::parse(&[0; 136]).is_some());
+    assert!(LayerHeader::parse(&[0; 140]).is_some());
 }
 
 #[test]

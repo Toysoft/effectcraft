@@ -7,7 +7,7 @@
 //! parameters that differ from their `pard` default have a value record in the `tdgp`.
 
 use crate::Chunk;
-use crate::bytes::{be_f64, be_i32, be_u32, cstr, text, until_nul};
+use crate::bytes::{array, be_f64, be_i32, be_u32, cstr, text, until_nul};
 use crate::typed::{Layer, PropGroup, PropNode, Property};
 
 /// The parameter type, the `u32` at byte 12 of `pard`. The numbering matches the plug-in
@@ -59,8 +59,17 @@ impl ParamKind {
 /// A decoded parameter value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParamValue {
-    /// A slider or angle value (float sliders: as stored; fixed sliders and angles: 16.16 decoded).
+    /// A slider or angle value (float sliders and the angle's stored value: degrees as stored;
+    /// fixed sliders and angles read from `pard`: 16.16 decoded).
     Number(f64),
+    /// A checkbox: stored as 1.0 when on; an absent record means off.
+    Bool(bool),
+    /// A point control as stored: a fraction of the layer size (`[111, 222]` px on a 1920x1080
+    /// layer is `[111/1920, 222/1080]`).
+    Point([f64; 2]),
+    /// A layer control: the id of the chosen layer (the `tdpi` chunk next to the value record).
+    /// In the implicit first parameter it is the id of the layer that owns the effect.
+    Layer(u32),
     /// A colour as ARGB fractions 0..1 (stored as doubles 0..255 in the order alpha, red, green,
     /// blue: a colour `[0.2, 0.6, 1]` is `[255, 51, 153, 255]`, with float rounding).
     Argb([f64; 4]),
@@ -163,16 +172,25 @@ impl<'f, 'a> EffectParam<'f, 'a> {
         self.stored
     }
 
-    /// The value in the value record: float sliders and colours only (the units of the other
-    /// types were not sampled). The record counts when its `tdsb` is 1.
+    /// The value in the value record: float sliders, angles, checkboxes, points, colours and layer
+    /// controls (the stored units of fixed sliders and popups were not sampled). A record counts
+    /// when its `tdsb` is 1 and it has no keyframes; a layer control reads the `tdpi` chunk.
     pub fn stored_value(&self) -> Option<ParamValue> {
         let p = self.stored?;
+        if self.kind == ParamKind::Layer {
+            return be_u32(p.chunk().child(b"tdpi")?.bytes()?, 0).map(ParamValue::Layer);
+        }
         if p.flags() != Some(1) || p.is_animated() {
             return None;
         }
         let v = p.static_value()?;
         match self.kind {
-            ParamKind::FloatSlider => v.first().copied().map(ParamValue::Number),
+            ParamKind::FloatSlider | ParamKind::Angle => v.first().copied().map(ParamValue::Number),
+            ParamKind::Checkbox => v.first().map(|x| ParamValue::Bool(*x != 0.0)),
+            ParamKind::Point => {
+                let [x, y] = *v.as_slice().first_chunk::<2>()?;
+                Some(ParamValue::Point([x, y]))
+            }
             ParamKind::Color => {
                 let [a, r, g, b] = *v.as_slice().first_chunk::<4>()?;
                 Some(ParamValue::Argb([a / 255.0, r / 255.0, g / 255.0, b / 255.0]))
@@ -181,24 +199,33 @@ impl<'f, 'a> EffectParam<'f, 'a> {
         }
     }
 
-    /// The default (or built-in current value) stored in `pard` at byte 56: a float slider's `f64`,
-    /// a fixed slider's or angle's 16.16 value, a popup's item index. Other types: `None`
-    /// (checkbox, point and colour defaults are not verified).
+    /// The default stored in `pard` at byte 56: a float slider's `f64`, a fixed slider's or angle's
+    /// 16.16 value, a colour's ARGB bytes, a popup's item index. Other types: `None` (the point
+    /// default is not verified; a checkbox is off, see [`EffectParam::value`]).
     ///
-    /// For Gaussian Blur the 25 stored here equals the value that was set (078); whether built-in
-    /// effects keep their current value in `pard` is not decided by the corpus.
+    /// It is the default and not the current value: Gaussian Blur with Blurriness 40 still has 25
+    /// here and a value record with 40. (The corpus manifest calls the default Blurriness 0, the
+    /// files only ever contain 25.)
     pub fn pard_default(&self) -> Option<ParamValue> {
         match self.kind {
             ParamKind::FloatSlider => be_f64(self.pard, 56).map(ParamValue::Number),
             ParamKind::FixedSlider | ParamKind::Angle => be_i32(self.pard, 56).map(|v| ParamValue::Number(f64::from(v) / 65536.0)),
             ParamKind::Popup => be_u32(self.pard, 56).map(ParamValue::Index),
+            ParamKind::Color => {
+                let [a, r, g, b] = array::<4>(self.pard, 56)?.map(|c| f64::from(c) / 255.0);
+                Some(ParamValue::Argb([a, r, g, b]))
+            }
             _ => None,
         }
     }
 
-    /// The effective value: the stored value when there is one, else the `pard` default.
+    /// The effective value: the stored value when there is one, else the `pard` default (absent =
+    /// default); a checkbox without a record is off.
     pub fn value(&self) -> Option<ParamValue> {
-        self.stored_value().or_else(|| self.pard_default())
+        self.stored_value().or_else(|| self.pard_default()).or(match self.kind {
+            ParamKind::Checkbox if self.stored.is_none() => Some(ParamValue::Bool(false)),
+            _ => None,
+        })
     }
 }
 

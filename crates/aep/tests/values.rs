@@ -4,7 +4,7 @@
 mod common;
 
 use common::{first_comp, fixture, layer_with_id, open};
-use effectcraft_aep::{Interpolation, KeyframeKind, Project, PropNode, Property, Transform, ValueSource};
+use effectcraft_aep::{Interpolation, KeyEase, KeyframeKind, Project, PropNode, Property, Transform, ValueSource};
 
 const L: u32 = 0x1b;
 
@@ -110,8 +110,8 @@ fn linear_position_keys() {
         assert_eq!(keys.len(), 3);
         // Keys added through the scripting interface are linear in and out, uncoloured, not roving.
         for k in &keys {
-            assert_eq!(k.kind(), KeyframeKind::Spatial);
-            assert_eq!((k.interpolation_a(), k.interpolation_b()), (Some(Interpolation::Linear), Some(Interpolation::Linear)));
+            assert_eq!(k.kind(), KeyframeKind::Spatial { components: 3 });
+            assert_eq!((k.interpolation_in(), k.interpolation_out()), (Some(Interpolation::Linear), Some(Interpolation::Linear)));
             assert_eq!((k.label(), k.is_roving()), (Some(0), Some(false)));
         }
         let secs: Vec<_> = keys.iter().map(|k| k.seconds(25600).unwrap()).collect();
@@ -134,7 +134,7 @@ fn ease_preset_sets_bezier_and_influence() {
         let keys: Vec<_> = p.keys().unwrap().keyframes().collect();
         assert_eq!(keys.len(), 2);
         for k in &keys {
-            assert_eq!((k.interpolation_a(), k.interpolation_b()), (Some(Interpolation::Bezier), Some(Interpolation::Bezier)));
+            assert_eq!((k.interpolation_in(), k.interpolation_out()), (Some(Interpolation::Bezier), Some(Interpolation::Bezier)));
             let s = k.spatial().unwrap();
             // The speeds sit at slots 0 and 2, the influences at slots 1 and 3; which pair is "in"
             // is not decided, so the slots are exposed as stored.
@@ -151,8 +151,8 @@ fn hold_keyframe() {
     // 053: key 1 is a hold keyframe on both sides (bytes 3, 3), key 2 stays linear; the values are unchanged.
     with_position("053-key-position-2key-hold-key1.aep", |p| {
         let keys: Vec<_> = p.keys().unwrap().keyframes().collect();
-        assert_eq!((keys[0].interpolation_a(), keys[0].interpolation_b()), (Some(Interpolation::Hold), Some(Interpolation::Hold)));
-        assert_eq!((keys[1].interpolation_a(), keys[1].interpolation_b()), (Some(Interpolation::Linear), Some(Interpolation::Linear)));
+        assert_eq!((keys[0].interpolation_in(), keys[0].interpolation_out()), (Some(Interpolation::Hold), Some(Interpolation::Hold)));
+        assert_eq!((keys[1].interpolation_in(), keys[1].interpolation_out()), (Some(Interpolation::Linear), Some(Interpolation::Linear)));
         assert_eq!(keys[0].spatial().unwrap().value, [0.0, 0.0, 0.0]);
         assert_eq!(keys[1].spatial().unwrap().value, [100.0, 0.0, 0.0]);
     });
@@ -209,12 +209,12 @@ fn scalar_opacity_keys() {
         assert_eq!(list.header.record_size, 48);
         let keys: Vec<_> = list.keyframes().collect();
         assert_eq!(keys.len(), 2);
-        assert!(keys.iter().all(|k| k.kind() == KeyframeKind::Scalar));
+        assert!(keys.iter().all(|k| k.kind() == KeyframeKind::Plain { components: 1 }));
         assert_eq!(keys.iter().map(|k| k.seconds(25600).unwrap()).collect::<Vec<_>>(), [0.0, 2.0]);
         assert_eq!(keys.iter().map(|k| k.scalar_value().unwrap()).collect::<Vec<_>>(), [0.0, 1.0]);
         for k in &keys {
-            assert_eq!((k.interpolation_a(), k.interpolation_b()), (Some(Interpolation::Linear), Some(Interpolation::Linear)));
-            assert_eq!(k.scalar_ease_slots(), Some([0.0; 4]));
+            assert_eq!((k.interpolation_in(), k.interpolation_out()), (Some(Interpolation::Linear), Some(Interpolation::Linear)));
+            assert_eq!(k.ease(), Some(KeyEase { in_speed: 0.0, in_influence: 0.0, out_speed: 0.0, out_influence: 0.0 }));
             assert_eq!(k.flags(), Some(0));
         }
         assert_eq!(keys[0].spatial(), None);

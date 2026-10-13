@@ -144,8 +144,8 @@ fn exercise_property(p: &Property<'_, '_>) {
         let scale = p.time_scale().unwrap_or(0);
         for k in keys.keyframes() {
             let _ = (k.time_units(), k.spatial_value(), k.raw().len(), k.kind(), k.seconds(scale), k.seconds(0));
-            let _ = (k.interpolation_a(), k.interpolation_b(), k.flags(), k.label(), k.is_roving());
-            let _ = (k.scalar_value(), k.scalar_ease_slots(), k.spatial());
+            let _ = (k.interpolation_in(), k.interpolation_out(), k.flags(), k.label(), k.is_roving());
+            let _ = (k.scalar_value(), k.ease(), k.spatial());
         }
     }
 }
@@ -434,7 +434,7 @@ fn extreme_values_in_the_decoded_headers() {
     assert_eq!(Rational { num: i64::MAX, den: i64::MIN }.reduced(), None);
     assert_eq!(Rational { num: i64::MIN, den: i64::MIN }.reduced(), Rational::new(1, 1));
     // A path whose point count is not a multiple of three, and non-finite box and scale.
-    let path = ShapePath { bbox: [f32::NAN, f32::INFINITY, f32::MIN, f32::MAX], closed_flag: 9, points: vec![[f32::NAN, 0.0]; 7] };
+    let path = ShapePath { bbox: [f32::NAN, f32::INFINITY, f32::MIN, f32::MAX], closed_flag: 9, open: true, points: vec![[f32::NAN, 0.0]; 7] };
     assert_eq!(path.vertex_count(), 2);
     assert_eq!(path.vertices((f64::NAN, f64::MAX)).len(), 2);
 }

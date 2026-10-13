@@ -68,15 +68,64 @@ pub enum Quality {
     Other(u8),
 }
 
-/// The blend mode, `ldta` byte 99. Only Normal and Multiply were sampled.
+/// The blend mode, `ldta` byte 99. Six modes were sampled; any other mode is kept as its raw code.
+/// The codes 2, 4, 5, 6 and 7 coincide with the numbers of the After Effects plug-in transfer
+/// modes; Difference is 26.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlendMode {
     /// `2`
     Normal,
+    /// `4`
+    Add,
     /// `5`
     Multiply,
+    /// `6`
+    Screen,
+    /// `7`
+    Overlay,
+    /// `26`
+    Difference,
     /// Any other value (not sampled; `0` on cameras and lights).
     Other(u8),
+}
+
+impl BlendMode {
+    /// The mode for a code.
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            2 => Self::Normal,
+            4 => Self::Add,
+            5 => Self::Multiply,
+            6 => Self::Screen,
+            7 => Self::Overlay,
+            26 => Self::Difference,
+            other => Self::Other(other),
+        }
+    }
+
+    /// The code as stored.
+    pub fn code(&self) -> u8 {
+        match self {
+            Self::Normal => 2,
+            Self::Add => 4,
+            Self::Multiply => 5,
+            Self::Screen => 6,
+            Self::Overlay => 7,
+            Self::Difference => 26,
+            Self::Other(code) => *code,
+        }
+    }
+}
+
+/// The light type, `ldta` `u32` at byte 136 of a light layer (0 on every other layer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightType {
+    /// `1`
+    Spot,
+    /// `2`
+    Point,
+    /// Any other value (parallel and ambient were not sampled).
+    Other(u32),
 }
 
 /// The layer type, `ldta` `u32` at byte 128.
@@ -96,7 +145,7 @@ pub enum LayerType {
     Other(u32),
 }
 
-/// The decoded fields of a layer's `ldta` chunk (164 bytes; the fields below need the first 136).
+/// The decoded fields of a layer's `ldta` chunk (164 bytes; the fields below need the first 140).
 ///
 /// Times are stored as a numerator and a denominator (the denominator is the composition's
 /// timescale, 1 in a precomp layer). The in and out points are stored **relative to the start**:
@@ -129,10 +178,13 @@ pub struct LayerHeader {
     pub layer_type: LayerType,
     /// The id of the parent layer, `None` when there is none.
     pub parent_id: Option<u32>,
+    /// The `u32` at byte 136 (the light type of a light layer, 0 elsewhere), see
+    /// [`LayerHeader::light_type`].
+    pub light_type_code: u32,
 }
 
 impl LayerHeader {
-    /// Decodes an `ldta` body; `None` when it is shorter than 136 bytes.
+    /// Decodes an `ldta` body; `None` when it is shorter than 140 bytes.
     pub fn parse(ldta: &[u8]) -> Option<Self> {
         let time = |at: usize| Some(Rational { num: i64::from(be_i32(ldta, at)?), den: i64::from(be_u32(ldta, at.checked_add(4)?)?) });
         let source = be_u32(ldta, 40)?;
@@ -152,11 +204,7 @@ impl LayerHeader {
             source_id: (source != 0 && source != u32::MAX).then_some(source),
             label: *ldta.get(61)?,
             name_copy: text(until_nul(ldta.get(64..96)?)),
-            blend_mode: match *ldta.get(99)? {
-                2 => BlendMode::Normal,
-                5 => BlendMode::Multiply,
-                other => BlendMode::Other(other),
-            },
+            blend_mode: BlendMode::from_code(*ldta.get(99)?),
             layer_type: match be_u32(ldta, 128)? {
                 0 => LayerType::Av,
                 1 => LayerType::Light,
@@ -166,6 +214,7 @@ impl LayerHeader {
                 other => LayerType::Other(other),
             },
             parent_id: (parent != 0).then_some(parent),
+            light_type_code: be_u32(ldta, 136)?,
         })
     }
 
@@ -194,6 +243,12 @@ impl LayerHeader {
         self.flag(1, 0x04)
     }
 
+    /// Byte 38 bit `0x40`: the layer orients itself towards its point of interest. Set on two-node
+    /// cameras (byte 38 is `0x44`) and on all lights, clear on a one-node camera (`0x04`).
+    pub fn is_auto_oriented(&self) -> bool {
+        self.flag(1, 0x40)
+    }
+
     /// Byte 38 bit `0x08`: solo.
     pub fn is_solo(&self) -> bool {
         self.flag(1, 0x08)
@@ -202,6 +257,26 @@ impl LayerHeader {
     /// Byte 38 bit `0x80`: the layer was created as a null object.
     pub fn is_null_object(&self) -> bool {
         self.flag(1, 0x80)
+    }
+
+    /// Byte 39 bit `0x01`: the video switch (the layer's eye icon; `enabled` in the scripting API).
+    pub fn is_video_enabled(&self) -> bool {
+        self.flag(2, 0x01)
+    }
+
+    /// The same as [`LayerHeader::is_video_enabled`].
+    pub fn is_enabled(&self) -> bool {
+        self.is_video_enabled()
+    }
+
+    /// Byte 39 bit `0x02`: the audio switch (`audioEnabled`).
+    pub fn is_audio_enabled(&self) -> bool {
+        self.flag(2, 0x02)
+    }
+
+    /// Byte 39 bit `0x04`: the effects switch (`effectsActive`).
+    pub fn is_effects_enabled(&self) -> bool {
+        self.flag(2, 0x04)
     }
 
     /// Byte 39 bit `0x08`: the motion blur switch.
@@ -223,6 +298,15 @@ impl LayerHeader {
     /// layers have it set from creation.
     pub fn collapses_transformations(&self) -> bool {
         self.flag(2, 0x80)
+    }
+
+    /// The light type of a light layer: spot 1, point 2 (`None` for any other layer type).
+    pub fn light_type(&self) -> Option<LightType> {
+        (self.layer_type == LayerType::Light).then_some(match self.light_type_code {
+            1 => LightType::Spot,
+            2 => LightType::Point,
+            other => LightType::Other(other),
+        })
     }
 
     /// The time stretch in percent (`stretch * 100`).
@@ -266,6 +350,21 @@ impl<'f, 'a> Layer<'f, 'a> {
     pub fn header(&self) -> Option<LayerHeader> {
         LayerHeader::parse(self.chunk.child(b"ldta")?.bytes()?)
     }
+
+    /// The video switch (byte 39 bit `0x01`), `enabled` in the scripting API.
+    pub fn is_enabled(&self) -> Option<bool> {
+        self.header().map(|h| h.is_video_enabled())
+    }
+
+    /// The audio switch (byte 39 bit `0x02`), `audioEnabled`.
+    pub fn is_audio_enabled(&self) -> Option<bool> {
+        self.header().map(|h| h.is_audio_enabled())
+    }
+
+    /// The effects switch (byte 39 bit `0x04`), `effectsActive`.
+    pub fn is_effects_enabled(&self) -> Option<bool> {
+        self.header().map(|h| h.is_effects_enabled())
+    }
 }
 
 /// The renderer of a composition (`LIST PRin` / `prin`).
@@ -292,8 +391,8 @@ pub struct CompHeader {
     /// The work area end (start + duration) in time units; `None` when it is the whole
     /// composition (stored as `0xffff_ffff`).
     pub work_area_end_units: Option<u32>,
-    /// The background colour as 8-bit R, G, B (bytes 52 to 54). Whether this is 8 or 16 bit per
-    /// channel is unknown; only 0 and 255 were sampled.
+    /// The background colour as R, G, B (bytes 52 to 54), 8 bits per channel: 0.5 is stored as 128
+    /// and reads back as 128/255.
     pub background: [u8; 3],
     /// The shutter angle in degrees.
     pub shutter_angle: u32,
@@ -361,6 +460,18 @@ impl CompHeader {
     /// The pixel aspect ratio as a number.
     pub fn pixel_aspect_ratio(&self) -> Option<f64> {
         self.pixel_aspect.to_f64()
+    }
+
+    /// The frame rate as an exact fraction `timescale / frame_duration`, as typed: 29.97 fps is
+    /// `23976 / 800` (not `30000 / 1001`), 23.976 fps is `23976 / 1000`.
+    pub fn frame_rate_exact(&self) -> Option<Rational> {
+        Rational::new(i64::from(self.time_base.timescale), i64::from(self.time_base.frame_duration))
+    }
+
+    /// The duration in whole frames (`duration / frame_duration`). After Effects snaps a duration
+    /// to a whole number of frames: 5 s at 29.97 fps becomes 150 frames (5.005 s).
+    pub fn duration_frames(&self) -> Option<u32> {
+        self.duration_units.checked_div(self.time_base.frame_duration)
     }
 }
 

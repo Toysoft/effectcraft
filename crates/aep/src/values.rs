@@ -4,11 +4,11 @@
 //! and composition (sparse storage), so a reader has to supply the defaults: Position defaults to
 //! the composition centre `[width / 2, height / 2, 0]` (verified: after the composition is resized
 //! without moving the layer, the old centre appears as a stored value), Anchor Point to the layer
-//! centre (`0.5, 0.5` of the layer size), Scale to 100 %, Rotation to 0 and Opacity to 100 %. These
-//! defaults are verified for AV layers (solids); cameras and lights use other conventions that
-//! are not decoded.
+//! centre (`0.5, 0.5` of the layer **source** size), Scale to 100 %, Rotation to 0 and Opacity to
+//! 100 %. These defaults are verified for AV layers (solids); cameras and lights use other
+//! conventions (see the `camera` module).
 
-use crate::typed::{Layer, PropGroup, PropNode};
+use crate::typed::{Layer, Project, PropGroup, PropNode};
 
 /// Where a [`Tracked`] value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,10 +35,9 @@ pub struct Tracked<T> {
 pub struct Transform {
     /// Pixels `[x, y, z]`.
     pub position: Tracked<[f64; 3]>,
-    /// Stored as a fraction of the layer size for x and y (`10, 20` px on a 1920x1080 layer is
-    /// `10/1920, 20/1080`) and in pixels for z; see [`Transform::anchor_px`]. Whether the divisor is
-    /// the layer's source size or the composition size is not decided by the corpus (both were
-    /// 1920x1080).
+    /// Stored as a fraction of the layer's **source** size for x and y (`10, 20` px on a 100x100
+    /// solid in a 1920x1080 composition is `0.1, 0.2`; on a 400x300 solid `100, 50` is `0.25, 1/6`)
+    /// and in pixels for z; see [`Transform::anchor_px`] and [`Project::layer_anchor_px`].
     pub anchor_fraction: Tracked<[f64; 3]>,
     /// Percent `[x, y, z]` (stored as fractions: 50 % is `0.5`).
     pub scale_percent: Tracked<[f64; 3]>,
@@ -49,7 +48,7 @@ pub struct Transform {
 }
 
 impl Transform {
-    /// The anchor point in pixels for a layer of this size.
+    /// The anchor point in pixels for a layer whose source has this size.
     pub fn anchor_px(&self, width: f64, height: f64) -> [f64; 3] {
         let [x, y, z] = self.anchor_fraction.value;
         [x * width, y * height, z]
@@ -76,6 +75,26 @@ pub(crate) fn read<const N: usize>(group: &PropGroup<'_, '_>, name: &str, defaul
         *slot = *v * scale;
     }
     Tracked { value: out, source }
+}
+
+/// Like [`read`] but `None` when the property is absent or unreadable (for properties whose default
+/// is not known), keeping the value's source.
+pub(crate) fn read_opt<const N: usize>(group: &PropGroup<'_, '_>, name: &str, scale: f64) -> Option<Tracked<[f64; N]>> {
+    let tracked = read(group, name, [0.0; N], scale);
+    matches!(tracked.source, ValueSource::Stored | ValueSource::Keyframed).then_some(tracked)
+}
+
+impl<'f, 'a> Project<'f, 'a> {
+    /// The anchor point of an AV layer in pixels: the stored fraction times the size of the layer's
+    /// source (a solid or footage item, or a precomp's composition), z unchanged. `None` when the
+    /// layer has no source (shape, text, camera, light) or no Transform group.
+    pub fn layer_anchor_px(&self, layer: &Layer<'f, 'a>) -> Option<Tracked<[f64; 3]>> {
+        let (width, height) = self.layer_source_size(layer)?;
+        let Some(PropNode::Group(group)) = layer.properties()?.get("ADBE Transform Group") else { return None };
+        let fraction = read(&group, "ADBE Anchor Point", [0.5, 0.5, 0.0], 1.0);
+        let [x, y, z] = fraction.value;
+        Some(Tracked { value: [x * f64::from(width), y * f64::from(height), z], source: fraction.source })
+    }
 }
 
 impl<'f, 'a> Layer<'f, 'a> {

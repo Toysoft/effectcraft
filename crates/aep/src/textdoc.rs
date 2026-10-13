@@ -6,7 +6,7 @@
 //! limited, never panics) and [`Layer::text_document`] pulls out the verified fields.
 
 use crate::Chunk;
-use crate::bytes::text;
+use crate::bytes::{be_u32, text};
 use crate::typed::{Comp, Layer, Property};
 
 /// How deep dictionaries and arrays may nest before the parser gives up.
@@ -246,6 +246,121 @@ pub struct TextDocument {
     pub font: Option<String>,
     /// The document's font list.
     pub fonts: Vec<String>,
+    /// The paragraph runs: one per paragraph, with its length in characters (including the
+    /// terminating `\r`) and its justification.
+    pub paragraphs: Vec<ParagraphRun>,
+    /// The style runs: consecutive characters with one style (a range style splits `Hello` into
+    /// runs of 1, 2 and 3 characters).
+    pub style_runs: Vec<StyleRun>,
+    /// The text box of paragraph (box) text; `None` for point text.
+    pub text_box: Option<TextBox>,
+}
+
+/// The paragraph justification (`RUN/5/0[n]/0/0/5/0`). Right and the justified variants were not
+/// sampled (right is presumably 1) and are kept as their raw value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Justification {
+    /// `0`
+    Left,
+    /// `2`
+    Center,
+    /// Any other value.
+    Other(i64),
+}
+
+/// A paragraph run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParagraphRun {
+    /// The number of characters including the `\r` that ends the paragraph.
+    pub length: usize,
+    pub justification: Justification,
+}
+
+/// A style run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StyleRun {
+    /// The number of characters in the run.
+    pub length: usize,
+    pub font_size: f64,
+    /// The fill colour as `[A, R, G, B]` floats 0..1.
+    pub fill_argb: [f64; 4],
+    /// The tracking (`RUN/6/0[n]/0/0/6/8`, 0 by default; 100 in the sample).
+    pub tracking: f64,
+}
+
+/// The frame of paragraph (box) text: the box in layer space, as traced by the 16 points of the
+/// frame path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextBox {
+    /// The top-left corner.
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+fn fill_of(style: &TextValue) -> Option<[f64; 4]> {
+    let fill = style.get("53")?.get("0")?.get("1")?;
+    Some([fill.at(0)?.as_f64()?, fill.at(1)?.as_f64()?, fill.at(2)?.as_f64()?, fill.at(3)?.as_f64()?])
+}
+
+fn usize_of(v: &TextValue) -> Option<usize> {
+    usize::try_from(v.as_i64()?).ok()
+}
+
+/// The paragraph runs of a text run dictionary (`RUN/5/0`).
+fn paragraph_runs(run: &TextValue) -> Vec<ParagraphRun> {
+    let Some(TextValue::Array(items)) = run.get("5").and_then(|v| v.get("0")) else { return Vec::new() };
+    items
+        .iter()
+        .filter_map(|e| {
+            let justification = e.get("0")?.get("0")?.get("5")?.get("0")?.as_i64()?;
+            Some(ParagraphRun {
+                length: usize_of(e.get("1")?)?,
+                justification: match justification {
+                    0 => Justification::Left,
+                    2 => Justification::Center,
+                    other => Justification::Other(other),
+                },
+            })
+        })
+        .collect()
+}
+
+/// The style runs of a text run dictionary (`RUN/6/0`).
+fn style_runs(run: &TextValue) -> Vec<StyleRun> {
+    let Some(TextValue::Array(items)) = run.get("6").and_then(|v| v.get("0")) else { return Vec::new() };
+    items
+        .iter()
+        .filter_map(|e| {
+            let style = e.get("0")?.get("0")?.get("6")?;
+            Some(StyleRun {
+                length: usize_of(e.get("1")?)?,
+                font_size: style.get("1")?.as_f64()?,
+                fill_argb: fill_of(style)?,
+                tracking: style.get("8").and_then(TextValue::as_f64).unwrap_or(0.0),
+            })
+        })
+        .collect()
+}
+
+/// The box of paragraph text from the frame dictionary `/0/8/0[0]/0`: key `/1/0` holds 16 x, y pairs
+/// that trace the rectangle, and `/2/0` is 1; both keys are absent for point text.
+fn text_box(top: &TextValue) -> Option<TextBox> {
+    let frame = top.get("0")?.get("8")?.get("0")?.at(0)?.get("0")?;
+    if frame.get("2")?.get("0")?.as_i64()? != 1 {
+        return None;
+    }
+    let TextValue::Array(coords) = frame.get("1")?.get("0")? else { return None };
+    let numbers: Vec<f64> = coords.iter().map(TextValue::as_f64).collect::<Option<_>>()?;
+    let (pairs, _) = numbers.as_chunks::<2>();
+    if pairs.is_empty() {
+        return None;
+    }
+    let min = |f: fn(&[f64; 2]) -> f64| pairs.iter().map(f).fold(f64::INFINITY, f64::min);
+    let max = |f: fn(&[f64; 2]) -> f64| pairs.iter().map(f).fold(f64::NEG_INFINITY, f64::max);
+    let (x, y) = (min(|p| p[0]), min(|p| p[1]));
+    Some(TextBox { x, y, width: max(|p| p[0]) - x, height: max(|p| p[1]) - y })
 }
 
 impl TextDocument {
@@ -255,8 +370,7 @@ impl TextDocument {
         let run = top.get("1")?.get("1")?.at(0)?.get("0")?;
         let raw_text = run.get("0")?.as_str()?.to_string();
         let style = run.get("6")?.get("0")?.at(0)?.get("0")?.get("0")?.get("6")?;
-        let fill = style.get("53")?.get("0")?.get("1")?;
-        let fill_argb = [fill.at(0)?.as_f64()?, fill.at(1)?.as_f64()?, fill.at(2)?.as_f64()?, fill.at(3)?.as_f64()?];
+        let fill_argb = fill_of(style)?;
         let font_index = usize::try_from(style.get("0")?.as_i64()?).ok()?;
         let mut fonts = Vec::new();
         if let Some(TextValue::Array(list)) = top.get("0").and_then(|v| v.get("1")).and_then(|v| v.get("0")) {
@@ -270,7 +384,16 @@ impl TextDocument {
             font_index,
             font: fonts.get(font_index).cloned(),
             fonts,
+            paragraphs: paragraph_runs(run),
+            style_runs: style_runs(run),
+            text_box: text_box(&top),
         })
+    }
+
+    /// The paragraphs: the stored text split at `\r`, each without its terminator. `A\rB` is stored
+    /// as `A\rB\r` and gives `["A", "B"]`.
+    pub fn paragraph_texts(&self) -> Vec<&str> {
+        self.raw_text.strip_suffix('\r').unwrap_or(&self.raw_text).split('\r').collect()
     }
 
     /// The fill colour as `[R, G, B]`.
@@ -288,7 +411,7 @@ impl<'f, 'a> Layer<'f, 'a> {
 }
 
 /// A marker with its comment.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Marker {
     /// The time in the property's time units (layer time for layer markers).
     pub time_units: i32,
@@ -296,6 +419,17 @@ pub struct Marker {
     pub seconds: Option<f64>,
     /// The comment (the first of the marker's `Utf8` strings).
     pub comment: String,
+    /// The duration in seconds (`NmHd`: the `u32` at byte 8 counts 1/600 s, the `u32` at byte 12
+    /// is that 600); 0 for a marker without duration.
+    pub duration_seconds: Option<f64>,
+    /// The chapter (second string).
+    pub chapter: String,
+    /// The URL (third string).
+    pub url: String,
+    /// The frame target (fourth string).
+    pub frame_target: String,
+    /// The cue point name (fifth string).
+    pub cue_point_name: String,
 }
 
 /// Reads the markers below `holder` (a layer or the composition's `SecL` list): the `mrst` list has a
@@ -305,13 +439,20 @@ fn markers_in(holder: &Chunk<'_>) -> Vec<Marker> {
     let Some(prop) = mrst.child_list(b"tdbs").and_then(Property::from_chunk) else { return Vec::new() };
     let Some(keys) = prop.keys() else { return Vec::new() };
     let scale = prop.time_scale().unwrap_or(0);
-    let comments =
-        mrst.descendants().map(|(_, c)| c).filter(|c| c.is_list(b"Nmrd")).map(|n| n.child(b"Utf8").and_then(Chunk::bytes).map(text).unwrap_or_default());
+    let details = mrst.descendants().map(|(_, c)| c).filter(|c| c.is_list(b"Nmrd"));
     keys.keyframes()
-        .zip(comments)
-        .filter_map(|(k, comment)| {
+        .zip(details)
+        .filter_map(|(k, nmrd)| {
             let time_units = k.time_units()?;
-            Some(Marker { time_units, seconds: k.seconds(scale), comment })
+            // The five strings, in the order comment, chapter, URL, frame target, cue point name.
+            let mut strings = nmrd.children().iter().filter(|c| c.is(b"Utf8")).map(|c| c.bytes().map(text).unwrap_or_default());
+            let mut next = || strings.next().unwrap_or_default();
+            let (comment, chapter, url, frame_target, cue_point_name) = (next(), next(), next(), next(), next());
+            let duration_seconds = nmrd.child(b"NmHd").and_then(Chunk::bytes).and_then(|h| {
+                let (duration, per_second) = (be_u32(h, 8)?, be_u32(h, 12)?);
+                (per_second != 0).then(|| f64::from(duration) / f64::from(per_second))
+            });
+            Some(Marker { time_units, seconds: k.seconds(scale), comment, duration_seconds, chapter, url, frame_target, cue_point_name })
         })
         .collect()
 }

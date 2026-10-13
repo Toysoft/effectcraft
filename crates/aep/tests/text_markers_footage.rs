@@ -96,7 +96,10 @@ fn comp_marker() {
     let file = open(&bytes);
     let project = Project::new(&file).unwrap();
     let comp = first_comp(&project);
-    assert_eq!(comp.markers(), [Marker { time_units: 25600, seconds: Some(1.0), comment: "CompMarker".to_string() }]);
+    assert_eq!(
+        comp.markers(),
+        [Marker { time_units: 25600, seconds: Some(1.0), comment: "CompMarker".to_string(), duration_seconds: Some(0.0), ..Marker::default() }]
+    );
     // The times are 16-byte records of the property inside `mrst`.
     let mrst = comp.item().chunk().child_list(b"SecL").unwrap().find_list(b"mrst").unwrap();
     let keys = Property::from_chunk(mrst.child_list(b"tdbs").unwrap()).unwrap().keys().unwrap();
@@ -113,7 +116,10 @@ fn layer_marker() {
     let file = open(&bytes);
     let project = Project::new(&file).unwrap();
     let comp = first_comp(&project);
-    assert_eq!(layer_with_id(&comp, L).markers(), [Marker { time_units: 25600, seconds: Some(1.0), comment: "LayerMarker".to_string() }]);
+    assert_eq!(
+        layer_with_id(&comp, L).markers(),
+        [Marker { time_units: 25600, seconds: Some(1.0), comment: "LayerMarker".to_string(), duration_seconds: Some(0.0), ..Marker::default() }]
+    );
     assert!(comp.markers().is_empty());
 }
 

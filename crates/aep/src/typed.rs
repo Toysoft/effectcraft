@@ -325,9 +325,13 @@ impl<'f, 'a> Property<'f, 'a> {
         (0..dims).map(|i| be_f64(cdat, i.checked_mul(8)?)).collect()
     }
 
-    /// The keyframe list of an animated property.
+    /// The keyframe list of an animated property, with the record layout the property header
+    /// selects (`tdb4` byte 3 = components, byte 7 non-zero = spatial template).
     pub fn keys(&self) -> Option<KeyList<'f>> {
-        KeyList::from_chunk(self.chunk.child_list(b"list")?)
+        let list = KeyList::from_chunk(self.chunk.child_list(b"list")?)?;
+        let header = self.header();
+        let layout = header.and_then(|h| Some(KeyLayout { components: *h.get(3)?, spatial: *h.get(7)? != 0 }));
+        Some(KeyList { layout, ..list })
     }
 }
 
@@ -363,6 +367,17 @@ impl ListHeader {
 pub struct KeyList<'f> {
     pub header: ListHeader,
     ldat: &'f [u8],
+    layout: Option<KeyLayout>,
+}
+
+/// What the property header says about its keyframe records: how many value components each
+/// record holds and which of the two record templates applies (see [`KeyframeKind`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyLayout {
+    /// `tdb4` byte 3.
+    pub components: u8,
+    /// `tdb4` byte 7 is non-zero: the spatial template (Position, colours) instead of the plain one.
+    pub spatial: bool,
 }
 
 impl<'f> KeyList<'f> {
@@ -375,7 +390,7 @@ impl<'f> KeyList<'f> {
         let header = ListHeader::parse(chunk.child(b"lhd3")?.bytes()?)?;
         let ldat: &[u8] = chunk.child(b"ldat").and_then(Chunk::bytes).unwrap_or(&[]);
         let expected = usize::try_from(header.count).ok()?.checked_mul(usize::try_from(header.record_size).ok()?)?;
-        (ldat.len() == expected).then_some(Self { header, ldat })
+        (ldat.len() == expected).then_some(Self { header, ldat, layout: None })
     }
 
     /// The number of records.
@@ -394,9 +409,16 @@ impl<'f> KeyList<'f> {
         self.ldat.chunks_exact(size.max(1))
     }
 
+    /// The record layout from the property header, `None` for a list that does not belong to a
+    /// property (the point list of a path).
+    pub fn layout(&self) -> Option<KeyLayout> {
+        self.layout
+    }
+
     /// The records of a keyframe list as [`Keyframe`]s.
     pub fn keyframes(&self) -> impl Iterator<Item = Keyframe<'f>> {
-        self.records().map(|record| Keyframe { record })
+        let layout = self.layout;
+        self.records().map(move |record| Keyframe { record, layout })
     }
 }
 
@@ -405,6 +427,7 @@ impl<'f> KeyList<'f> {
 #[derive(Debug, Clone, Copy)]
 pub struct Keyframe<'f> {
     pub(crate) record: &'f [u8],
+    pub(crate) layout: Option<KeyLayout>,
 }
 
 impl<'f> Keyframe<'f> {
@@ -416,11 +439,5 @@ impl<'f> Keyframe<'f> {
     /// The keyframe time in time units (layer time).
     pub fn time_units(&self) -> Option<i32> {
         be_u32(self.record, 0).map(|u| i32::from_be_bytes(u.to_be_bytes()))
-    }
-
-    /// The value of a 3-component spatial keyframe (Position): a 128-byte record holds x, y and
-    /// z as `f64` at bytes 56, 64 and 72. See [`Keyframe::spatial`] for the other fields.
-    pub fn spatial_value(&self) -> Option<[f64; 3]> {
-        self.spatial().map(|s| s.value)
     }
 }

@@ -108,6 +108,7 @@ fn shape_path_maths_with_a_pixel_box_and_tangents() {
     let p = ShapePath {
         bbox: [-100.0, -100.0, 100.0, 100.0],
         closed_flag: 1,
+        open: false,
         points: vec![
             [0.5, 0.0],
             [0.75, 0.0],
@@ -129,5 +130,5 @@ fn shape_path_maths_with_a_pixel_box_and_tangents() {
     assert_eq!(v[1].in_handle, [100.0, 100.0]);
     assert_eq!(v[2].position, [-100.0, 100.0]);
     assert_eq!(v[2].out_handle, [-100.0, 100.0]);
-    assert!(ShapePath { bbox: [0.0; 4], closed_flag: 0, points: Vec::new() }.vertices((1.0, 1.0)).is_empty());
+    assert!(ShapePath { bbox: [0.0; 4], closed_flag: 0, open: false, points: Vec::new() }.vertices((1.0, 1.0)).is_empty());
 }
