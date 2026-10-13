@@ -97,7 +97,7 @@ track mattes, frame blending, layer styles, 3D material options, audio levels, g
 
 ## How fidelity is checked
 
-- `crates/aep-import/tests/import.rs`: the 103 synthetic fixtures of `crates/aep/tests/fixtures`
+- `crates/aep-import/tests/import.rs`: the synthetic fixtures of `crates/aep/tests/fixtures` (151 files)
   (each the same one-solid project with one change) are imported and the resulting project is
   compared with the value the fixture was made with: composition size/rate/duration/work
   area/background, layer names, switches and timing, blend modes, parent links, static
@@ -121,8 +121,9 @@ and is the next fidelity step.
 The importer reads the file only through `effectcraft-aep`, whose every field was established by
 one-change-per-file experiments on projects we generated ourselves ([aep-format.md](aep-format.md),
 section 5). The importer adds no knowledge of the format of its own: when the reader has no
-verified field for something, the importer reports it instead of guessing. No other `.aep` reader
-or converter was consulted.
+verified field for something, the importer reports it instead of guessing. No source code or format
+documentation of another `.aep` reader or converter was used; the evidence for every field is the
+generated corpus and its case numbers, not a claim about what was or was not seen elsewhere.
 
 ## Not done yet
 
