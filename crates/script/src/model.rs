@@ -434,13 +434,11 @@ fn alias(k: &str) -> Option<&'static str> {
     })
 }
 
-/// How many groups below a property group a string key may search (#1063: Pro Levels2's Alpha
-/// controls sit one group down, under Alpha).
-const NESTED_CHILD_DEPTH: u8 = 3;
+/// The effect whose Alpha group a script can reach from the effect (Pro Levels2, "ADBE Pro Levels2").
+const LEVELS2_EFFECT: &str = "ec.color.levelsic";
 
-/// The child of `g` that a string key names. The direct children are searched first, then the
-/// groups nested below them, up to `depth` levels.
-fn find_child<'a>(l: &'a Layer, g: &'a PropGroup, k: &str, depth: u8) -> Option<&'a Node> {
+/// The child of `g` that a string key names: a direct child, or a Pro Levels2 Alpha control (#1063).
+fn find_child<'a>(l: &'a Layer, g: &'a PropGroup, k: &str) -> Option<&'a Node> {
     let chain_of = |n: &Node| -> String {
         let mut ch = if g.uid == l.props.uid { vec![] } else { chain(l, g.uid).unwrap_or_default() };
         ch.push(n);
@@ -455,15 +453,18 @@ fn find_child<'a>(l: &'a Layer, g: &'a PropGroup, k: &str, depth: u8) -> Option<
         .or_else(|| g.children.iter().find(|n| n.name().eq_ignore_ascii_case(k)))
         .or_else(|| g.children.iter().find(|n| loose(n.name()) == lk || loose(n.match_id()) == lk))
         .or_else(|| alias(&lk).and_then(|m| g.children.iter().find(|n| n.match_id() == m)))
-        .or_else(|| {
-            if depth == 0 {
-                return None;
-            }
-            g.children.iter().find_map(|n| match n {
-                Node::Group(sub) => find_child(l, sub, k, depth - 1),
-                Node::Prop(_) => None,
-            })
-        })
+        .or_else(|| levels2_alpha(l, g, k))
+}
+
+/// Pro Levels2's Alpha controls sit one group down, under Alpha, so a script finds them by name on
+/// the effect. No other nested group is searched: a same-named control there stays `null`, as
+/// After Effects returns it (#1160).
+fn levels2_alpha<'a>(l: &'a Layer, g: &'a PropGroup, k: &str) -> Option<&'a Node> {
+    if !matches!(&g.kind, GroupKind::Effect { effect } if effect == LEVELS2_EFFECT) {
+        return None;
+    }
+    let alpha = g.children.iter().find_map(|n| n.as_group().filter(|s| s.match_id == "alpha"))?;
+    find_child(l, alpha, k)
 }
 
 fn child(s: &Session, a: &J) -> R {
@@ -473,7 +474,7 @@ fn child(s: &Session, a: &J) -> R {
     let key = a.get("key").cloned().unwrap_or(J::Null);
     let found = match &key {
         J::Number(n) => n.as_u64().and_then(|i| g.children.get((i as usize).checked_sub(1)?)),
-        J::String(k) => find_child(l, g, k, NESTED_CHILD_DEPTH),
+        J::String(k) => find_child(l, g, k),
         _ => None,
     };
     match found {

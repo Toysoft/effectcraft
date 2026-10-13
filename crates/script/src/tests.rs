@@ -1375,3 +1375,19 @@ fn scripted_levels_alpha_controls_resolve_from_the_effect() {
     );
     assert_eq!(o.result, json!([0.5, 0.5]));
 }
+
+/// Only Pro Levels2's Alpha group is searched below a property: a control nested elsewhere, such as
+/// Anchor Point under Transform, is `null` on the layer, as in After Effects (#1160).
+#[test]
+fn nested_controls_stay_null_outside_levels2_alpha() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        r#"
+        var c = app.project.items.addComp("Nested", 320, 180, 1, 3, 30);
+        var l = c.layers.addSolid([1, 0, 0], "S", 320, 180, 1);
+        [l.property("Anchor Point") === null, l.property("Transform").property("Anchor Point") !== null]
+        "#,
+    );
+    assert_eq!(o.result, json!([true, true]));
+}
