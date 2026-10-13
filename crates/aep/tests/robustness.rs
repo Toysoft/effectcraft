@@ -147,6 +147,10 @@ fn exercise_property(p: &Property<'_, '_>) {
             let _ = (k.time_units(), k.spatial_value(), k.raw().len(), k.kind(), k.seconds(scale), k.seconds(0));
             let _ = (k.interpolation_in(), k.interpolation_out(), k.flags(), k.label(), k.is_roving());
             let _ = (k.scalar_value(), k.ease(), k.spatial(), k.components(), k.value(), k.plain_ease_slots());
+            let _ = (k.ease_components(), k.color_distance());
+            for component in [0, 1, 2, 3, 7, 255, usize::MAX] {
+                let _ = k.ease_component(component);
+            }
             let _ = k.spatial().map(|s| (s.value.len(), s.in_tangent.len(), s.out_tangent.len(), s.ease));
         }
     }
@@ -174,6 +178,7 @@ fn exercise_layer(project: &Project<'_, '_>, comp_size: (u32, u32), layer: &Laye
     let _ = (layer.name(), layer.is_three_d(), layer.id());
     if let Some(h) = layer.header() {
         let _ = (h.in_point(), h.out_point(), h.in_point_seconds(), h.out_point_seconds(), h.start_seconds(), h.stretch_percent());
+        let _ = (h.stretch_ratio(), h.stretch_den);
         let _ = (h.is_shy(), h.is_locked(), h.is_solo(), h.is_three_d(), h.is_motion_blur(), h.is_adjustment(), h.is_guide());
         let _ = (h.is_null_object(), h.collapses_transformations(), h.name_is_user_set(), h.quality, h.blend_mode, h.layer_type);
         let _ = (h.is_enabled(), h.is_video_enabled(), h.is_audio_enabled(), h.is_effects_enabled(), h.is_auto_oriented(), h.light_type(), h.blend_mode.code());
@@ -181,8 +186,26 @@ fn exercise_layer(project: &Project<'_, '_>, comp_size: (u32, u32), layer: &Laye
     let _ = (layer.is_enabled(), layer.is_audio_enabled(), layer.is_effects_enabled());
     let _ = (layer.camera_position().map(|p| p.reported(comp_size.0, comp_size.1, true)), layer.camera_point_of_interest(), layer.light_intensity());
     let _ = project.layer_anchor_px(layer);
+    let _ = (layer.camera_zoom(), layer.camera_depth_of_field(), layer.camera_focus_distance(), layer.camera_aperture());
+    let _ = (layer.light_color(), layer.light_cone_angle(), layer.light_cone_feather());
+    let _ = layer
+        .time_remap()
+        .map(|t| (t.enabled, t.keys.iter().fold(0.0, |acc, k| acc + k.value_seconds + k.time_seconds.unwrap_or(0.0) + f64::from(k.time_units))));
     for g in layer.shape_groups() {
-        let _ = (g.name, g.position);
+        let _ = (g.name, g.position, g.details.len());
+        for d in &g.details {
+            match d {
+                effectcraft_aep::ShapeDetail::Polystar { star_type, outer_radius, inner_radius, inner_roundness, item_index } => {
+                    let _ = (star_type.value, outer_radius.value, inner_radius.value, inner_roundness.map(|r| r.value), *item_index);
+                }
+                effectcraft_aep::ShapeDetail::Gradient { gradient_type, highlight_length, highlight_angle, item_index } => {
+                    let _ = (gradient_type.value, highlight_length.map(|t| t.value), highlight_angle.map(|t| t.value), *item_index);
+                }
+                effectcraft_aep::ShapeDetail::RectPosition { position, item_index } => {
+                    let _ = (position.value, *item_index);
+                }
+            }
+        }
         for item in g.items {
             if let effectcraft_aep::ShapeItem::Path { paths, .. } = item {
                 for s in paths {
@@ -202,13 +225,21 @@ fn exercise_layer(project: &Project<'_, '_>, comp_size: (u32, u32), layer: &Laye
         let _ = (e.match_name().len(), e.name(), e.declared_param_count());
         for p in e.params() {
             let _ = (p.index, p.kind, p.name.len(), p.items.as_ref().map(Vec::len), p.pard().len(), p.value(), p.stored_value(), p.pard_default());
+            let _ = (p.is_default(), p.popup_item_count(), p.popup_selected_index(), p.popup_selected_item());
+            for owner in [0, 1, 0x1b, u32::MAX] {
+                let _ = p.layer_ref(owner);
+            }
+            for size in [0.0, 1920.0, f64::NAN, f64::INFINITY, f64::MAX] {
+                let _ = p.point_px(size, size);
+            }
             if let Some(s) = p.stored() {
                 exercise_property(&s);
             }
         }
     }
     for m in layer.masks() {
-        let _ = (m.name, m.mode, m.inverted, m.feather, m.opacity_percent, m.expansion, m.path_animated, m.path_key_seconds.len());
+        let _ = (m.name.clone(), m.mode, m.inverted, m.counter, m.feather, m.opacity_percent, m.expansion, m.path_animated, m.path_key_seconds.len());
+        let _ = project.mask_vertices_px(layer, &m).map(|shapes| shapes.iter().map(Vec::len).sum::<usize>());
         for s in &m.shapes {
             let _ = (s.vertex_count(), s.vertices((1920.0, 1080.0)).len(), s.vertices((f64::NAN, f64::INFINITY)).len(), s.open);
         }
@@ -216,9 +247,16 @@ fn exercise_layer(project: &Project<'_, '_>, comp_size: (u32, u32), layer: &Laye
     if let Some(t) = layer.text_document() {
         let _ = (t.fill_rgb(), t.fonts.len(), t.text.len(), t.raw_text.len(), t.font_size, t.font.clone(), t.paragraph_texts().len());
         let _ = (t.paragraphs.iter().fold(0, |acc, p| acc + p.length), t.style_runs.iter().fold(0.0, |acc, r| acc + r.tracking + r.fill_argb[0]), t.text_box);
+        let _ = t
+            .style_runs
+            .iter()
+            .fold(0.0, |acc, r| acc + r.leading.unwrap_or(0.0) + f64::from(u8::from(r.faux_bold)) + f64::from(u8::from(r.faux_italic)) + r.font_index as f64);
+        let _ = t.style_runs.iter().map(|r| r.caps).collect::<Vec<_>>();
+        let _ = t.paragraphs.iter().map(|p| p.justification).collect::<Vec<_>>();
     }
     for m in layer.markers() {
         let _ = (m.comment.len(), m.chapter.len(), m.url.len(), m.frame_target.len(), m.cue_point_name.len(), m.duration_seconds);
+        let _ = (m.label, m.cue_type, m.cue_params.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>());
     }
 }
 
@@ -232,6 +270,7 @@ fn exercise_comp(project: &Project<'_, '_>, comp: &Comp<'_, '_>) {
         let _ = (h.frame_rate(), h.frame_rate_from_fixed(), h.duration_seconds(), h.work_area_start_seconds(), h.work_area_end_seconds());
         let _ = (h.frame_rate_exact(), h.duration_frames());
         let _ = (h.background_rgb(), h.pixel_aspect_ratio(), h.pixel_aspect.reduced(), h.shutter_angle, h.motion_blur);
+        let _ = (h.shutter_phase, h.display_start, h.display_start_seconds(), h.display_start_frame());
     }
     for layer in comp.layers() {
         exercise_layer(project, size, &layer);
@@ -243,6 +282,9 @@ fn exercise(file: &AepFile<'_>) {
     let Some(project) = Project::new(file) else { return };
     for item in project.all_items() {
         let _ = (item.kind(), item.name(), item.id(), item.label(), item.used_item_ids(), item.footage(), item.display_name());
+        let _ = item
+            .footage()
+            .map(|f| (f.duration, f.native_frame_rate, f.bits_per_pixel, f.file_size, f.audio_sample_rate, f.is_sequence, f.sequence_frame_count()));
         let _ = item.id().and_then(|id| project.item_by_id(id));
         if let Some(comp) = item.comp() {
             exercise_comp(&project, &comp);
@@ -306,6 +348,32 @@ const DECODED: &[&str] = &[
     "253-camera-position-100-200-m1000.aep",
     "254-light-spot-intensity-50.aep",
     "259-solid-blue-0-0-1.aep",
+    "300-fx-gaussianblur-0-explicit.aep",
+    "305-key-scale-bezier-ease.aep",
+    "306-key-maskfeather-bezier-ease.aep",
+    "307-key-fillcolor-bezier.aep",
+    "309-solid-100x100-mask-rect.aep",
+    "310-solid-100x100-pointcontrol.aep",
+    "317-layer-stretch150.aep",
+    "318-layer-inpoint-0.3333.aep",
+    "319-precomp-timeremap.aep",
+    "321-fx-layercontrol-none.aep",
+    "324-fx-dropdown-5items-select3.aep",
+    "327-comp-displaystartframe-100.aep",
+    "328-mask-two-ellipse-rect.aep",
+    "329-mask-ellipse-mode-none.aep",
+    "331-shape-polystar-polygon-5-100.aep",
+    "332-shape-gradient-fill-radial.aep",
+    "333-shape-group-two-rects.aep",
+    "334-text-box-right-align.aep",
+    "335-text-point-fauxbold.aep",
+    "340-text-range-two-styles.aep",
+    "342-camera-dof-800-30.aep",
+    "343-light-spot-color-red.aep",
+    "349-marker-layer-event-cue-params.aep",
+    "351-footage-wav-as-layer.aep",
+    "352-footage-pngseq-imported.aep",
+    "354-footage-pngseq-timeremap.aep",
 ];
 
 #[test]
@@ -521,6 +589,10 @@ fn hostile_keyframe_layouts_never_panic() {
         "210-key-fill-color-2key-linear.aep",
         "093-mask-path-2keys.aep",
         "122-marker-comp-1s.aep",
+        "305-key-scale-bezier-ease.aep",
+        "306-key-maskfeather-bezier-ease.aep",
+        "307-key-fillcolor-bezier.aep",
+        "319-precomp-timeremap.aep",
     ] {
         let bytes = fixture(name);
         let original = parse(&bytes).unwrap().into_owned();
@@ -548,7 +620,20 @@ fn hostile_keyframe_layouts_never_panic() {
 fn hostile_text_dictionaries_and_marker_headers_never_panic() {
     // Damage the marker header (NmHd), the strings and the layer reference in many ways, and the
     // opaque text lists.
-    for name in ["245-text-box-400x200-Hello.aep", "248-text-range-fill-red-1-3.aep", "249-marker-layer-full.aep", "220-fx-layercontrol-to-layer1.aep"] {
+    for name in [
+        "245-text-box-400x200-Hello.aep",
+        "248-text-range-fill-red-1-3.aep",
+        "249-marker-layer-full.aep",
+        "220-fx-layercontrol-to-layer1.aep",
+        "334-text-box-right-align.aep",
+        "335-text-point-fauxbold.aep",
+        "340-text-range-two-styles.aep",
+        "349-marker-layer-event-cue-params.aep",
+        "321-fx-layercontrol-none.aep",
+        "324-fx-dropdown-5items-select3.aep",
+        "352-footage-pngseq-imported.aep",
+        "350-footage-wav-imported.aep",
+    ] {
         let bytes = fixture(name);
         let original = parse(&bytes).unwrap().into_owned();
         let mut rng = Rng(0x07e4_70dd_ba11 ^ bytes.len() as u64);
@@ -561,4 +646,56 @@ fn hostile_text_dictionaries_and_marker_headers_never_panic() {
             exercise(&file);
         }
     }
+}
+
+#[test]
+fn extreme_values_in_the_batch_3_fields() {
+    use effectcraft_aep::{CompHeader, Footage, LayerHeader, Rational};
+    // Time stretch: zero and maximal numerators and denominators (bytes 8 and 108), with extreme times.
+    for (num, den) in [(0u32, 0u32), (1, 0), (0, 1), (u32::MAX, 1), (1, u32::MAX), (u32::MAX, u32::MAX), (3, 2)] {
+        let mut ldta = [0u8; 164];
+        ldta[8..12].copy_from_slice(&num.to_be_bytes());
+        ldta[108..112].copy_from_slice(&den.to_be_bytes());
+        ldta[12..16].copy_from_slice(&i32::MIN.to_be_bytes());
+        ldta[16..20].copy_from_slice(&1u32.to_be_bytes());
+        ldta[20..24].copy_from_slice(&i32::MAX.to_be_bytes());
+        ldta[24..28].copy_from_slice(&u32::MAX.to_be_bytes());
+        ldta[28..32].copy_from_slice(&i32::MIN.to_be_bytes());
+        ldta[32..36].copy_from_slice(&1u32.to_be_bytes());
+        let h = LayerHeader::parse(&ldta).unwrap();
+        let _ = (h.stretch_ratio(), h.stretch_percent(), h.in_point(), h.out_point(), h.in_point_seconds(), h.out_point_seconds());
+        if den == 0 {
+            assert_eq!((h.stretch_ratio(), h.in_point(), h.out_point()), (None, None, None));
+        }
+    }
+    // Display start and shutter phase from extreme bytes; a missing tail leaves them unknown.
+    for fill in [0x00u8, 0x7f, 0x80, 0xff] {
+        let c = CompHeader::parse(&[fill; 204]).unwrap();
+        let _ = (c.shutter_phase, c.display_start, c.display_start_seconds(), c.display_start_frame());
+    }
+    let zero_rate = CompHeader::parse(&[0; 204]).unwrap();
+    assert_eq!((zero_rate.display_start_seconds(), zero_rate.display_start_frame()), (None, None));
+    // Footage durations: zero denominator, negative and maximal numerators, a huge frame rate.
+    let base = Footage {
+        file_type: String::new(),
+        width: 0,
+        height: 0,
+        name: None,
+        is_solid: false,
+        solid_argb: None,
+        path: None,
+        duration: None,
+        native_frame_rate: 0,
+        bits_per_pixel: 0,
+        file_size: 0,
+        audio_sample_rate: None,
+        is_sequence: true,
+    };
+    for (num, den, rate) in [(3i64, 30i64, 30u32), (3, 0, 30), (-3, 30, 30), (i64::MAX, 1, u32::MAX), (i64::MIN, -1, u32::MAX), (1, i64::MAX, 1), (0, 1, 0)] {
+        let f = Footage { duration: Some(Rational { num, den }), native_frame_rate: rate, ..base.clone() };
+        let _ = f.sequence_frame_count();
+    }
+    assert_eq!(Footage { duration: Some(Rational { num: 3, den: 30 }), native_frame_rate: 30, ..base.clone() }.sequence_frame_count(), Some(3));
+    assert_eq!(Footage { duration: Some(Rational { num: 3, den: 0 }), native_frame_rate: 30, ..base.clone() }.sequence_frame_count(), None);
+    assert_eq!(Footage { duration: None, ..base }.sequence_frame_count(), None);
 }
