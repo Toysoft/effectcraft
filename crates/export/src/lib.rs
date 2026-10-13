@@ -4,7 +4,6 @@
 //! |---|---|---|---|---|
 //! | H.264 | MP4 | FilmCraft H.264 High, 8-bit 4:2:0 BT.709 limited, VBR | no | AAC-LC (FilmCraft), mono/stereo |
 //! | ProRes | QuickTime MOV | FilmCraft ProRes 422 Proxy/LT/422/HQ, 10-bit; 4444/4444 XQ 4:4:4 | 4444 (16-bit alpha coding) | PCM 16/24-bit or 32-bit float, mono/stereo |
-//! | Uncompressed | QuickTime MOV (`raw `) | 8-bit RGB (depth 24, rows padded to even bytes) or ARGB (depth 32) | RGB + Alpha (straight or premultiplied) | PCM 16/24-bit or 32-bit float, mono/stereo |
 //! | PNG / JPEG / TIFF sequence | one file per frame | 8-bit | PNG, TIFF | — |
 //! | OpenEXR sequence | one file per frame | 32-bit float, linear light, premultiplied | yes | — |
 //! | Animated GIF | GIF89a | 256-colour palette per frame (NeuQuant) | 1-bit | — |
@@ -194,9 +193,7 @@ async fn export_with(cx: &Cx<'_>, progress: &mut dyn FnMut(&Progress) -> bool, t
     st.advance(0)?;
     let (w, h) = output_size(comp, cx.settings, cx.output);
     let mut report = match cx.output.format {
-        OutputFormat::H264 | OutputFormat::Hevc | OutputFormat::Av1 | OutputFormat::ProRes | OutputFormat::Uncompressed => {
-            encode::movie(cx, comp, w, h, &mut st).await?
-        }
+        OutputFormat::H264 | OutputFormat::Hevc | OutputFormat::Av1 | OutputFormat::ProRes | OutputFormat::Uncompressed => encode::movie(cx, comp, w, h, &mut st).await?,
         OutputFormat::Gif => gif_export(cx, comp, w, h, &mut st).await?,
         OutputFormat::WebM => webm::webm(cx, comp, w, h, &mut st).await?,
         OutputFormat::Wav => webm::audio_file(cx, comp, false, &mut st)?,
@@ -230,8 +227,20 @@ impl State<'_> {
 }
 
 /// Frames per parallel batch.
-pub(crate) fn batch_size() -> u64 {
-    rayon::current_num_threads().clamp(2, 16) as u64
+pub(crate) fn dynamic_batch_size(w: u32, h: u32) -> u64 {
+    let threads = rayon::current_num_threads() as u64;
+    //read current available RAM
+    let available_ram = effectcraft_engine::sysinfo::memory()
+        .map(|m| m.available)
+        .unwrap_or(8 * 1024 * 1024 * 1024); //fallback to 8GB if running inside sandbox/web environment
+    //leave maximum 60% current RAM for exporting
+    let budget = (available_ram.saturating_mul(6) / 10).max(1_500_000_000);
+    //estimate memory for 1 frame compositing (~x16 flat buffer f32)
+    let base_frame_bytes = (w as u64).saturating_mul(h as u64).saturating_mul(16);
+    let estimated_cost_per_frame = base_frame_bytes.saturating_mul(16).max(10 * 1024 * 1024);
+    let max_by_ram = (budget / estimated_cost_per_frame).max(1);
+    //use all available CPU threads if RAM is capable of
+    max_by_ram.min(threads).clamp(1, 16)
 }
 
 /// Crop/pad 8-bit RGBA to `w`×`h` (codec rounding).
@@ -259,7 +268,7 @@ async fn sequence(cx: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut State<'_>) 
         Channels::Rgba if !fmt.supports_alpha() => Channels::Rgb,
         c => c,
     };
-    let batch = batch_size();
+    let batch = dynamic_batch_size(w, h);
     let mut bytes = 0u64;
     let mut i = 0;
     while i < st.total {
@@ -369,7 +378,7 @@ async fn gif_export(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut State<'_
     let cs_per_frame = 100.0 * rate.den as f64 / rate.num as f64;
     let mut clock = 0.0f64;
     let mut emitted = 0u64;
-    let batch = batch_size();
+    let batch = dynamic_batch_size(w, h);
     let mut i = 0;
     while i < st.total {
         let end = (i + batch).min(st.total);
@@ -413,5 +422,24 @@ mod tests {
         assert_eq!(&p[12..16], &[0, 0, 0, 0]);
         assert_eq!(OutputFormat::H264.coded_size(1, 101), (2, 100));
         assert_eq!(OutputFormat::Gif.coded_size(1, 101), (1, 101));
+    }
+    #[test]
+    fn dynamic_batch_size_scales_with_resolution() {
+        let batch_4k = dynamic_batch_size(3840, 2160);
+        let batch_1080p = dynamic_batch_size(1920, 1080);
+        let batch_720p = dynamic_batch_size(1280, 720);
+        let _batch_tiny = dynamic_batch_size(64, 64);
+
+        // Higher resolutions must have equal or smaller batch size
+        assert!(batch_4k <= batch_1080p);
+        assert!(batch_1080p <= batch_720p);
+
+        // Always in [1, 16]
+        assert!(batch_4k >= 1);
+        assert!(batch_1080p >= 1);
+
+        // Edge cases: Never panic with unusual size
+        assert!(dynamic_batch_size(0, 0) >= 1);
+        assert!(dynamic_batch_size(1, 1) >= 1);
     }
 }

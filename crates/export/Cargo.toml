@@ -28,6 +28,7 @@ rayon = { workspace = true }
 web-time = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+effectcraft-engine.workspace = true
 
 [dev-dependencies]
 effectcraft-media = { workspace = true }
