@@ -256,12 +256,14 @@ pub struct TextDocument {
     pub text_box: Option<TextBox>,
 }
 
-/// The paragraph justification (`RUN/5/0[n]/0/0/5/0`). Right and the justified variants were not
-/// sampled (right is presumably 1) and are kept as their raw value.
+/// The paragraph justification (`RUN/5/0[n]/0/0/5/0`). The justified variants were not sampled and
+/// are kept as their raw value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Justification {
     /// `0`
     Left,
+    /// `1` (334; the scripting enum value 7414 is not what is stored)
+    Right,
     /// `2`
     Center,
     /// Any other value.
@@ -276,6 +278,19 @@ pub struct ParagraphRun {
     pub justification: Justification,
 }
 
+/// The capitalisation of a style run (`RUN/6/0[n]/0/0/6/12`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caps {
+    /// `0`
+    Normal,
+    /// `1`
+    Small,
+    /// `2`
+    All,
+    /// Any other value.
+    Other(i64),
+}
+
 /// A style run.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StyleRun {
@@ -286,6 +301,18 @@ pub struct StyleRun {
     pub fill_argb: [f64; 4],
     /// The tracking (`RUN/6/0[n]/0/0/6/8`, 0 by default; 100 in the sample).
     pub tracking: f64,
+    /// Faux bold (slot `/6/2`). Setting it also prepends a font-list entry and moves the style's
+    /// font index to 1 (335).
+    pub faux_bold: bool,
+    /// Faux italic (slot `/6/3`, 336).
+    pub faux_italic: bool,
+    /// All caps / small caps (slot `/6/12`; 337, 338).
+    pub caps: Caps,
+    /// The leading as stored (slot `/6/5`): automatic leading is stored as 98.0 for 100 px Times
+    /// New Roman; an explicit leading 60 is 60.0 (339). `None` when the slot is missing.
+    pub leading: Option<f64>,
+    /// The index of the run's font in the document's font list (slot `/6/0`).
+    pub font_index: usize,
 }
 
 /// The frame of paragraph (box) text: the box in layer space, as traced by the 16 points of the
@@ -319,6 +346,7 @@ fn paragraph_runs(run: &TextValue) -> Vec<ParagraphRun> {
                 length: usize_of(e.get("1")?)?,
                 justification: match justification {
                     0 => Justification::Left,
+                    1 => Justification::Right,
                     2 => Justification::Center,
                     other => Justification::Other(other),
                 },
@@ -339,6 +367,16 @@ fn style_runs(run: &TextValue) -> Vec<StyleRun> {
                 font_size: style.get("1")?.as_f64()?,
                 fill_argb: fill_of(style)?,
                 tracking: style.get("8").and_then(TextValue::as_f64).unwrap_or(0.0),
+                faux_bold: matches!(style.get("2"), Some(TextValue::Bool(true))),
+                faux_italic: matches!(style.get("3"), Some(TextValue::Bool(true))),
+                caps: match style.get("12").and_then(TextValue::as_i64) {
+                    None | Some(0) => Caps::Normal,
+                    Some(1) => Caps::Small,
+                    Some(2) => Caps::All,
+                    Some(other) => Caps::Other(other),
+                },
+                leading: style.get("5").and_then(TextValue::as_f64),
+                font_index: style.get("0").and_then(usize_of).unwrap_or(0),
             })
         })
         .collect()
@@ -430,6 +468,25 @@ pub struct Marker {
     pub frame_target: String,
     /// The cue point name (fifth string).
     pub cue_point_name: String,
+    /// The label colour index (`NmHd` byte 16; 3 in 347, 0 by default). It is not in the keyframe
+    /// flags.
+    pub label: Option<u8>,
+    /// The cue type (`NmHd` `u32` at byte 0).
+    pub cue_type: Option<CueType>,
+    /// The cue point parameters: key and value strings that follow the five fixed strings (the
+    /// count is the `u32` at byte 4 of `NmHd`).
+    pub cue_params: Vec<(String, String)>,
+}
+
+/// The cue point type of a marker (`NmHd` `u32` at byte 0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CueType {
+    /// `4`: an event cue (also for markers without a cue point name).
+    Event,
+    /// `5`: a navigation cue.
+    Navigation,
+    /// Any other value.
+    Other(u32),
 }
 
 /// Reads the markers below `holder` (a layer or the composition's `SecL` list): the `mrst` list has a
@@ -448,11 +505,32 @@ fn markers_in(holder: &Chunk<'_>) -> Vec<Marker> {
             let mut strings = nmrd.children().iter().filter(|c| c.is(b"Utf8")).map(|c| c.bytes().map(text).unwrap_or_default());
             let mut next = || strings.next().unwrap_or_default();
             let (comment, chapter, url, frame_target, cue_point_name) = (next(), next(), next(), next(), next());
-            let duration_seconds = nmrd.child(b"NmHd").and_then(Chunk::bytes).and_then(|h| {
+            let extras: Vec<String> = strings.collect();
+            let header = nmrd.child(b"NmHd").and_then(Chunk::bytes);
+            let duration_seconds = header.and_then(|h| {
                 let (duration, per_second) = (be_u32(h, 8)?, be_u32(h, 12)?);
                 (per_second != 0).then(|| f64::from(duration) / f64::from(per_second))
             });
-            Some(Marker { time_units, seconds: k.seconds(scale), comment, duration_seconds, chapter, url, frame_target, cue_point_name })
+            let pairs = header.and_then(|h| be_u32(h, 4)).and_then(|n| usize::try_from(n).ok()).unwrap_or(0);
+            let cue_params = extras.as_chunks::<2>().0.iter().take(pairs).map(|[k, v]| (k.clone(), v.clone())).collect();
+            let cue_type = header.and_then(|h| be_u32(h, 0)).map(|t| match t {
+                4 => CueType::Event,
+                5 => CueType::Navigation,
+                other => CueType::Other(other),
+            });
+            Some(Marker {
+                time_units,
+                seconds: k.seconds(scale),
+                comment,
+                duration_seconds,
+                chapter,
+                url,
+                frame_target,
+                cue_point_name,
+                label: header.and_then(|h| h.get(16).copied()),
+                cue_type,
+                cue_params,
+            })
         })
         .collect()
 }

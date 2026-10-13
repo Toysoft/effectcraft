@@ -7,14 +7,15 @@
 //! single one when the path is static).
 
 use crate::Chunk;
-use crate::bytes::{be_f32, be_u32};
-use crate::typed::{KeyList, Layer, PropGroup, PropNode, Property};
+use crate::bytes::{be_f32, be_u32, until_nul};
+use crate::typed::{KeyList, Layer, Project, PropGroup, PropNode, Property};
 use crate::values::{Tracked, read};
 
-/// The mask mode (`mkif` `u32` at byte 4). The mode None was not sampled and is kept as its raw
-/// value.
+/// The mask mode (`mkif` `u32` at byte 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaskMode {
+    /// `0` (329)
+    None,
     /// `1`
     Add,
     /// `2`
@@ -35,6 +36,7 @@ impl MaskMode {
     /// The mode for a stored id.
     pub fn from_id(id: u32) -> Self {
         match id {
+            0 => Self::None,
             1 => Self::Add,
             2 => Self::Subtract,
             3 => Self::Intersect,
@@ -75,8 +77,8 @@ impl PathVertex {
 /// every sample). The box is the box of the vertices **and** their handles. The `list` holds three
 /// points per vertex, each as two `f32` in [0, 1] of the box, in the order `[vertex i, out handle i,
 /// in handle i + 1]`; the last record is the in handle of vertex 0. For masks the box is normalised
-/// to the layer size (whether the layer's or the composition's size is not decided: both were
-/// 1920x1080); for the paths of shape layers it is in pixels. Handles equal their vertex when a
+/// to the **layer** size (the size of the layer's source, not the composition's: on a 100x100 solid
+/// a 60x40 mask rectangle at the centre has the box `0.2, 0.3, 0.8, 0.7`, 309); for the paths of shape layers it is in pixels. Handles equal their vertex when a
 /// vertex has no tangents; a tangent is the handle minus the vertex, without a sign change.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapePath {
@@ -140,11 +142,14 @@ impl ShapePath {
 pub struct Mask {
     /// The mask name (`Mask 1`).
     pub name: Option<String>,
-    /// The mode, from the parade's `mkif`. Only the first mask of a layer gets it: with several
-    /// masks it is not known whether `mkif` is stored once per mask.
+    /// The mode, from this mask's `mkif` (there is one `mkif` per mask, directly before its atom).
     pub mode: Option<MaskMode>,
-    /// The invert switch (`mkif` byte 0); same restriction as `mode`.
+    /// The invert switch (`mkif` byte 0).
     pub inverted: Option<bool>,
+    /// The running mask id counter of the layer (`mkif` `u32` at byte 8): 1 for the first mask
+    /// created on a layer, +1 per mask created later on the same layer (undo does not reset it).
+    /// A session counter, not a stable id.
+    pub counter: Option<u32>,
     /// Feather in pixels `[x, y]`; absent = `[0, 0]`.
     pub feather: Tracked<[f64; 2]>,
     /// Opacity in percent (stored as a fraction); absent = 100.
@@ -166,6 +171,7 @@ fn mask_from_atom(atom: &PropGroup<'_, '_>, mkif: Option<&[u8]>) -> Mask {
         name: atom.user_name(),
         mode: mkif.and_then(|m| be_u32(m, 4)).map(MaskMode::from_id),
         inverted: mkif.and_then(|m| m.first()).map(|b| *b != 0),
+        counter: mkif.and_then(|m| be_u32(m, 8)),
         feather: read(atom, "ADBE Mask Feather", [0.0, 0.0], 1.0),
         opacity_percent: Tracked { value: opacity.value[0], source: opacity.source },
         expansion: Tracked { value: expansion.value[0], source: expansion.source },
@@ -187,22 +193,36 @@ fn mask_from_atom(atom: &PropGroup<'_, '_>, mkif: Option<&[u8]>) -> Mask {
     mask
 }
 
+impl<'f, 'a> Project<'f, 'a> {
+    /// The vertices of every path shape of a mask in pixels of the layer: mask boxes are normalised
+    /// to the **layer** size (the size of its source), not the composition's. `None` when the layer
+    /// has no source with a size.
+    pub fn mask_vertices_px(&self, layer: &Layer<'f, 'a>, mask: &Mask) -> Option<Vec<Vec<PathVertex>>> {
+        let (width, height) = self.layer_source_size(layer)?;
+        Some(mask.shapes.iter().map(|s| s.vertices((f64::from(width), f64::from(height)))).collect())
+    }
+}
+
 impl<'f, 'a> Layer<'f, 'a> {
     /// The layer's masks, in stack order.
     pub fn masks(&self) -> Vec<Mask> {
         let Some(root) = self.properties() else { return Vec::new() };
         let Some(PropNode::Group(parade)) = root.get("ADBE Mask Parade") else { return Vec::new() };
-        let mkif = parade.chunk().child(b"mkif").and_then(Chunk::bytes);
-        parade
-            .entries()
-            .into_iter()
-            .filter(|e| e.match_name == "ADBE Mask Atom")
-            .filter_map(|e| match e.node {
-                PropNode::Group(atom) => Some(atom),
-                _ => None,
-            })
-            .enumerate()
-            .map(|(i, atom)| mask_from_atom(&atom, if i == 0 { mkif } else { None }))
-            .collect()
+        // Per mask: `tdmn` (Mask Atom), `mkif`, then the atom's `tdgp`.
+        let mut masks = Vec::new();
+        let (mut name, mut mkif): (Option<&[u8]>, Option<&[u8]>) = (None, None);
+        for c in parade.chunk().children() {
+            if c.is(b"tdmn") {
+                name = c.bytes();
+            } else if c.is(b"mkif") {
+                mkif = c.bytes();
+            } else if c.is_list(b"tdgp") {
+                let is_atom = name.take().is_some_and(|n| until_nul(n) == b"ADBE Mask Atom");
+                if is_atom && let Some(atom) = PropGroup::from_chunk(c) {
+                    masks.push(mask_from_atom(&atom, mkif.take()));
+                }
+            }
+        }
+        masks
     }
 }

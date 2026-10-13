@@ -9,7 +9,8 @@
 //! one of two templates for `n` value components:
 //!
 //! * **plain** (`tdb4` byte 7 = 0; Opacity, Rotation, Scale, 2-D properties, sliders): the value
-//!   (`n` x `f64`) at byte 8, then four `f64` per component of ease. Size `8 + 40 n`.
+//!   (`n` x `f64`) at byte 8, then four `f64` per component of ease, type-major (`[in speed x n]
+//!   [in influence x n][out speed x n][out influence x n]`). Size `8 + 40 n`.
 //! * **spatial** (`tdb4` byte 7 != 0; Position with `n` = 3, colours with `n` = 4): a `u32` at 8, the
 //!   arc length (`f64`) at 16, the four ease slots at 24 to 55, the value (`n` x `f64`) at 56, then
 //!   the spatial in tangent and out tangent (`n` x `f64` each). Size `56 + 24 n`.
@@ -201,7 +202,7 @@ impl<'f> Keyframe<'f> {
     /// The ease of the key: the four slots at byte 16 of a one-component plain record or at byte 24
     /// of a spatial record. For linear and hold keys all four are 0 (a bezier key stores what
     /// `setTemporalEase` was given). Plain records with several components keep four slots per
-    /// component whose order is not decided by the corpus, see [`Keyframe::plain_ease_slots`].
+    /// component, see [`Keyframe::ease_component`] and [`Keyframe::plain_ease_slots`].
     pub fn ease(&self) -> Option<KeyEase> {
         match self.kind() {
             KeyframeKind::Plain { components: 1 } => ease_at(self.record, 16),
@@ -211,11 +212,57 @@ impl<'f> Keyframe<'f> {
     }
 
     /// The `4 n` ease `f64` of a plain record as stored (from byte `8 + 8 n`). With one component
-    /// they are [`Keyframe::ease`]; with several, only all-zero (linear) records were sampled, so
-    /// their order is not decoded.
+    /// they are [`Keyframe::ease`]; with several they are type-major, see
+    /// [`Keyframe::ease_component`].
     pub fn plain_ease_slots(&self) -> Option<Vec<f64>> {
         match self.kind() {
             KeyframeKind::Plain { components } => doubles(self.record, components.checked_mul(8)?.checked_add(8)?, components.checked_mul(4)?),
+            _ => None,
+        }
+    }
+
+    /// The ease of one value component. A plain record with `n` components stores the `4 n` ease
+    /// doubles **type-major**: `[in speed x n][in influence x n][out speed x n][out influence x n]`
+    /// starting at byte `8 + 8 n`, and component `i` uses slot `i` of each block (verified for the
+    /// block layout with Scale `n = 3` and Mask Feather `n = 2` keys whose ease was the same in
+    /// every dimension; that different values sit in the slots of their dimension is inferred).
+    /// A spatial record (Position, colours) has one ease entry for all components, so only
+    /// `component == 0` returns it. For one component this is [`Keyframe::ease`].
+    pub fn ease_component(&self, component: usize) -> Option<KeyEase> {
+        match self.kind() {
+            KeyframeKind::Plain { components } if component < components => {
+                let block = components.checked_mul(8)?;
+                let first = block.checked_add(8)?;
+                let at = |k: usize| first.checked_add(block.checked_mul(k)?)?.checked_add(component.checked_mul(8)?);
+                Some(KeyEase {
+                    in_speed: be_f64(self.record, at(0)?)?,
+                    in_influence: be_f64(self.record, at(1)?)?,
+                    out_speed: be_f64(self.record, at(2)?)?,
+                    out_influence: be_f64(self.record, at(3)?)?,
+                })
+            }
+            KeyframeKind::Spatial { .. } if component == 0 => ease_at(self.record, 24),
+            _ => None,
+        }
+    }
+
+    /// The ease of every value component of a plain record, see [`Keyframe::ease_component`]
+    /// (one entry for a spatial record).
+    pub fn ease_components(&self) -> Option<Vec<KeyEase>> {
+        let n = match self.kind() {
+            KeyframeKind::Plain { components } => components,
+            KeyframeKind::Spatial { .. } => 1,
+            KeyframeKind::MaskPath | KeyframeKind::Marker | KeyframeKind::Other(_) => return None,
+        };
+        (0..n).map(|i| self.ease_component(i)).collect()
+    }
+
+    /// The Euclidean ARGB distance to the next key that After Effects writes at byte 16 of a colour
+    /// (4-component spatial) record whose interpolation is not linear: 255 sqrt(2) = 360.6245 for
+    /// red to blue; 0 on the last key and on linear keys. `None` for other records.
+    pub fn color_distance(&self) -> Option<f64> {
+        match self.kind() {
+            KeyframeKind::Spatial { components: 4 } => be_f64(self.record, 16),
             _ => None,
         }
     }

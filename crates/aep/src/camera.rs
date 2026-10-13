@@ -14,7 +14,7 @@
 //!   only when it is not the default 100.
 
 use crate::typed::{Layer, PropNode};
-use crate::values::{Tracked, ValueSource, read};
+use crate::values::{Tracked, ValueSource, read, read_opt};
 
 /// The Position of a camera or light layer as stored.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,6 +58,74 @@ impl<'f, 'a> Layer<'f, 'a> {
         let root = self.properties()?;
         let Some(PropNode::Group(options)) = root.get("ADBE Light Options Group") else { return None };
         let t = read(&options, "ADBE Light Intensity", [100.0], 1.0);
+        Some(Tracked { value: t.value[0], source: t.source })
+    }
+}
+
+/// The camera zoom After Effects uses when `ADBE Camera Zoom` is absent: 2666.67 px for the 50 mm
+/// default camera in the 1920 px wide corpus composition. Whether it follows other composition
+/// widths was not sampled.
+pub const DEFAULT_CAMERA_ZOOM: f64 = 2_666.666_666_666_666_5;
+
+impl<'f, 'a> Layer<'f, 'a> {
+    fn camera_options(&self) -> Option<crate::typed::PropGroup<'f, 'a>> {
+        match self.properties()?.get("ADBE Camera Options Group") {
+            Some(PropNode::Group(g)) => Some(g),
+            _ => None,
+        }
+    }
+
+    fn light_options(&self) -> Option<crate::typed::PropGroup<'f, 'a>> {
+        match self.properties()?.get("ADBE Light Options Group") {
+            Some(PropNode::Group(g)) => Some(g),
+            _ => None,
+        }
+    }
+
+    /// A camera's zoom in pixels (`ADBE Camera Options Group/ADBE Camera Zoom`); absent = the
+    /// default, [`DEFAULT_CAMERA_ZOOM`] (341: 2000 is stored). The auto Position keeps `-2666.67` and
+    /// is not recomputed from the zoom.
+    pub fn camera_zoom(&self) -> Option<Tracked<f64>> {
+        let t = read(&self.camera_options()?, "ADBE Camera Zoom", [DEFAULT_CAMERA_ZOOM], 1.0);
+        Some(Tracked { value: t.value[0], source: t.source })
+    }
+
+    /// The depth of field switch (`ADBE Camera Depth of Field`, a checkbox; off by default, 342).
+    pub fn camera_depth_of_field(&self) -> Option<Tracked<bool>> {
+        let t = read(&self.camera_options()?, "ADBE Camera Depth of Field", [0.0], 1.0);
+        Some(Tracked { value: t.value[0] != 0.0, source: t.source })
+    }
+
+    /// A camera's focus distance in pixels (`ADBE Camera Focus Distance`); `None` while absent (its
+    /// default is not known).
+    pub fn camera_focus_distance(&self) -> Option<Tracked<f64>> {
+        let t = read_opt::<1>(&self.camera_options()?, "ADBE Camera Focus Distance", 1.0)?;
+        Some(Tracked { value: t.value[0], source: t.source })
+    }
+
+    /// A camera's aperture (`ADBE Camera Aperture`); `None` while absent (its default is not known).
+    pub fn camera_aperture(&self) -> Option<Tracked<f64>> {
+        let t = read_opt::<1>(&self.camera_options()?, "ADBE Camera Aperture", 1.0)?;
+        Some(Tracked { value: t.value[0], source: t.source })
+    }
+
+    /// A light's colour as `[A, R, G, B]` fractions (`ADBE Light Options Group/ADBE Light Color`,
+    /// stored as doubles 0..255); white when absent (343 stores red).
+    pub fn light_color(&self) -> Option<Tracked<[f64; 4]>> {
+        Some(read(&self.light_options()?, "ADBE Light Color", [1.0; 4], 1.0 / 255.0))
+    }
+
+    /// A spot light's cone angle in degrees (`ADBE Light Cone Angle`); 90 when absent (344 stores 60).
+    /// A point light stores 90 with `tdsb` 3.
+    pub fn light_cone_angle(&self) -> Option<Tracked<f64>> {
+        let t = read(&self.light_options()?, "ADBE Light Cone Angle", [90.0], 1.0);
+        Some(Tracked { value: t.value[0], source: t.source })
+    }
+
+    /// A spot light's cone feather in percent (`ADBE Light Cone Feather 2`); 50 when absent (345
+    /// stores 30).
+    pub fn light_cone_feather(&self) -> Option<Tracked<f64>> {
+        let t = read(&self.light_options()?, "ADBE Light Cone Feather 2", [50.0], 1.0);
         Some(Tracked { value: t.value[0], source: t.source })
     }
 }

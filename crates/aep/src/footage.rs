@@ -1,7 +1,8 @@
 //! Item ids and labels, footage items (solids and files), precomp linkage, and the name and size
 //! of a layer's source.
 
-use crate::bytes::{be_f32, be_u32, cstr, le_u32, text};
+use crate::bytes::{be_f32, be_f64, be_u32, cstr, le_u32, text};
+use crate::header::Rational;
 use crate::typed::{Item, ItemKind, Layer, Project};
 
 /// The footage data of an item (`LIST Pin ` with `sspc`, `opti` and, for files, `Als2/alas`).
@@ -21,15 +22,65 @@ pub struct Footage {
     /// The colour of a solid as ARGB floats 0..1 (`opti` bytes 10, 14, 18, 22); a red solid is
     /// `[1, 1, 0, 0]`.
     pub solid_argb: Option<[f32; 4]>,
-    /// The file path from the alias JSON (`Als2/alas`, key `fullpath`); none for solids.
+    /// The file path from the alias JSON (`Als2/alas`, key `fullpath`); none for solids. For an
+    /// image sequence it is the sequence **folder**.
     pub path: Option<String>,
+    /// The duration in seconds as stored (`sspc` `u32` at byte 38 over `u32` at byte 42; unreduced):
+    /// 0/1 for stills, 48000/48000 for the 1 s WAV (the sample rate is the denominator), 3/30 for
+    /// the three-frame image sequence (the frame rate is the denominator).
+    pub duration: Option<Rational>,
+    /// The native frame rate (`sspc` `u32` at byte 56): 30 for the image sequence, 0 for stills,
+    /// audio and solids (also 0 when the byte is missing).
+    pub native_frame_rate: u32,
+    /// The bits per pixel (`sspc` `u32` at byte 60): 32 for an RGBA still, 24 for an RGB sequence,
+    /// 0 for solids and audio.
+    pub bits_per_pixel: u32,
+    /// The size in bytes of the source file(s) (`sspc` `u32` at byte 208): 149 for the png, 96044
+    /// for the WAV (44 + 48000 x 2), 504 for three 168-byte png files.
+    pub file_size: u32,
+    /// The audio sample rate (`sspc` `f64` at byte 160, 48000.0 for the WAV); `None` for footage
+    /// without audio.
+    pub audio_sample_rate: Option<f64>,
+    /// True when the alias points at a folder (`"target_is_folder":true`): an image sequence is ONE
+    /// item whose alias is its folder and whose `opti` holds the first file name.
+    pub is_sequence: bool,
 }
 
 impl Footage {
+    /// The number of frames of an image sequence (`duration * native_frame_rate`: 3/30 s at 30 fps is
+    /// 3); `None` for anything else.
+    pub fn sequence_frame_count(&self) -> Option<u32> {
+        if !self.is_sequence {
+            return None;
+        }
+        let d = self.duration?;
+        let frames = i128::from(d.num).checked_mul(i128::from(self.native_frame_rate))?;
+        let den = i128::from(d.den);
+        if den <= 0 || frames % den != 0 {
+            return None;
+        }
+        u32::try_from(frames / den).ok()
+    }
+
     /// The solid's colour as fractions R, G, B.
     pub fn solid_rgb(&self) -> Option<[f32; 3]> {
         let [_, r, g, b] = self.solid_argb?;
         Some([r, g, b])
+    }
+}
+
+/// The boolean value of `"key"` in a flat JSON object (`true` / `false`); `None` when missing.
+pub(crate) fn json_bool(json: &[u8], key: &str) -> Option<bool> {
+    let needle = format!("\"{key}\":");
+    let needle = needle.as_bytes();
+    let at = json.windows(needle.len()).position(|w| w == needle)?;
+    let rest = json.get(at.checked_add(needle.len())?..)?;
+    if rest.starts_with(b"true") {
+        Some(true)
+    } else if rest.starts_with(b"false") {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -112,7 +163,9 @@ impl<'f, 'a> Item<'f, 'a> {
         let sspc = pin.child(b"sspc")?.bytes()?;
         let opti = pin.child(b"opti")?.bytes()?;
         let is_solid = opti.get(..4) == Some(&b"Soli"[..]);
-        let path = pin.child_list(b"Als2").and_then(|als| als.child(b"alas")).and_then(|alas| alas.bytes()).and_then(|json| json_string(json, "fullpath"));
+        let alias = pin.child_list(b"Als2").and_then(|als| als.child(b"alas")).and_then(|alas| alas.bytes());
+        let path = alias.and_then(|json| json_string(json, "fullpath"));
+        let is_sequence = alias.and_then(|json| json_bool(json, "target_is_folder")).unwrap_or(false);
         let solid_argb = if is_solid { Some([be_f32(opti, 10)?, be_f32(opti, 14)?, be_f32(opti, 18)?, be_f32(opti, 22)?]) } else { None };
         Some(Footage {
             file_type: cstr(sspc, 22, 4)?,
@@ -122,6 +175,12 @@ impl<'f, 'a> Item<'f, 'a> {
             is_solid,
             solid_argb,
             path,
+            duration: be_u32(sspc, 38).zip(be_u32(sspc, 42)).map(|(num, den)| Rational { num: i64::from(num), den: i64::from(den) }),
+            native_frame_rate: be_u32(sspc, 56).unwrap_or(0),
+            bits_per_pixel: be_u32(sspc, 60).unwrap_or(0),
+            file_size: be_u32(sspc, 208).unwrap_or(0),
+            audio_sample_rate: be_f64(sspc, 160).filter(|r| r.is_finite() && *r > 0.0),
+            is_sequence,
         })
     }
 

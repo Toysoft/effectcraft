@@ -4,7 +4,7 @@
 mod common;
 
 use common::{first_comp, fixture, layer_with_id, open};
-use effectcraft_aep::{ItemKind, KeyframeKind, LayerType, Marker, Project, Property, TextDocument, TextValue, parse_text_dict};
+use effectcraft_aep::{CueType, ItemKind, KeyframeKind, LayerType, Marker, Project, Property, TextDocument, TextValue, parse_text_dict};
 
 const L: u32 = 0x1b;
 
@@ -98,7 +98,15 @@ fn comp_marker() {
     let comp = first_comp(&project);
     assert_eq!(
         comp.markers(),
-        [Marker { time_units: 25600, seconds: Some(1.0), comment: "CompMarker".to_string(), duration_seconds: Some(0.0), ..Marker::default() }]
+        [Marker {
+            time_units: 25600,
+            seconds: Some(1.0),
+            comment: "CompMarker".to_string(),
+            duration_seconds: Some(0.0),
+            label: Some(0),
+            cue_type: Some(CueType::Event),
+            ..Marker::default()
+        }]
     );
     // The times are 16-byte records of the property inside `mrst`.
     let mrst = comp.item().chunk().child_list(b"SecL").unwrap().find_list(b"mrst").unwrap();
@@ -118,7 +126,15 @@ fn layer_marker() {
     let comp = first_comp(&project);
     assert_eq!(
         layer_with_id(&comp, L).markers(),
-        [Marker { time_units: 25600, seconds: Some(1.0), comment: "LayerMarker".to_string(), duration_seconds: Some(0.0), ..Marker::default() }]
+        [Marker {
+            time_units: 25600,
+            seconds: Some(1.0),
+            comment: "LayerMarker".to_string(),
+            duration_seconds: Some(0.0),
+            label: Some(0),
+            cue_type: Some(CueType::Event),
+            ..Marker::default()
+        }]
     );
     assert!(comp.markers().is_empty());
 }
@@ -253,6 +269,9 @@ fn marker_with_duration_and_all_strings() {
             url: "http://a.example/u".to_string(),
             frame_target: "_blank".to_string(),
             cue_point_name: "CueX".to_string(),
+            label: Some(0),
+            cue_type: Some(effectcraft_aep::CueType::Event),
+            cue_params: Vec::new(),
         }]
     );
 }

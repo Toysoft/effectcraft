@@ -48,11 +48,15 @@ impl Rational {
     }
 
     /// `self + other * factor`, exact, `None` on a zero denominator or overflow.
-    fn plus_scaled(&self, other: &Rational, factor: i64) -> Option<Rational> {
-        let den = i128::from(self.den).checked_mul(i128::from(other.den))?;
-        let a = i128::from(self.num).checked_mul(i128::from(other.den))?;
-        let b = i128::from(other.num).checked_mul(i128::from(factor))?.checked_mul(i128::from(self.den))?;
-        let num = a.checked_add(b)?;
+    fn plus_scaled(&self, other: &Rational, factor: &Rational) -> Option<Rational> {
+        if self.den == 0 || other.den == 0 || factor.den == 0 {
+            return None;
+        }
+        // other * factor = (other.num * factor.num) / (other.den * factor.den)
+        let scaled_num = i128::from(other.num).checked_mul(i128::from(factor.num))?;
+        let scaled_den = i128::from(other.den).checked_mul(i128::from(factor.den))?;
+        let den = i128::from(self.den).checked_mul(scaled_den)?;
+        let num = i128::from(self.num).checked_mul(scaled_den)?.checked_add(scaled_num.checked_mul(i128::from(self.den))?)?;
         Rational { num: i64::try_from(num).ok()?, den: i64::try_from(den).ok()? }.reduced()
     }
 }
@@ -155,9 +159,13 @@ pub struct LayerHeader {
     /// The layer id (unique in the project); parent links use it.
     pub id: u32,
     pub quality: Quality,
-    /// The time stretch as a whole multiplier (`1` = 100 %, `2` = 200 %). How 50 % or 33.3 % is
-    /// stored is unknown, see [`LayerHeader::stretch_percent`].
+    /// The numerator of the time stretch (`u32` at byte 8). The stretch is the exact ratio
+    /// `stretch / stretch_den`: `1/1` = 100 %, `2/1` = 200 %, `1/2` = 50 %, `3/2` = 150 %, see
+    /// [`LayerHeader::stretch_ratio`].
     pub stretch: u32,
+    /// The denominator of the time stretch (`u32` at byte 108; 1 in every file before 50 % was
+    /// sampled).
+    pub stretch_den: u32,
     /// The layer start time, as stored.
     pub start: Rational,
     /// The in point relative to the start, as stored.
@@ -197,6 +205,7 @@ impl LayerHeader {
                 other => Quality::Other(other),
             },
             stretch: be_u32(ldta, 8)?,
+            stretch_den: be_u32(ldta, 108)?,
             start: time(12)?,
             in_relative: time(20)?,
             out_relative: time(28)?,
@@ -309,9 +318,16 @@ impl LayerHeader {
         })
     }
 
-    /// The time stretch in percent (`stretch * 100`).
+    /// The time stretch as an exact reduced ratio (`stretch / stretch_den`: 50 % is `1/2`, 150 %
+    /// is `3/2`); `None` for a zero denominator.
+    pub fn stretch_ratio(&self) -> Option<Rational> {
+        Rational::new(i64::from(self.stretch), i64::from(self.stretch_den))
+    }
+
+    /// The time stretch in percent (`stretch / stretch_den * 100`); a zero denominator reads as 1.
     pub fn stretch_percent(&self) -> f64 {
-        f64::from(self.stretch) * 100.0
+        let den = if self.stretch_den == 0 { 1.0 } else { f64::from(self.stretch_den) };
+        f64::from(self.stretch) / den * 100.0
     }
 
     /// The start time in seconds, `None` for a zero denominator.
@@ -321,12 +337,14 @@ impl LayerHeader {
 
     /// The absolute in point, `start + in * stretch`, exact and reduced.
     pub fn in_point(&self) -> Option<Rational> {
-        self.start.plus_scaled(&self.in_relative, i64::from(self.stretch))
+        self.start.plus_scaled(&self.in_relative, &self.stretch_ratio()?)
     }
 
-    /// The absolute out point, `start + out * stretch`, exact and reduced.
+    /// The absolute out point, `start + out * stretch`, exact and reduced. For a footage layer the
+    /// stored denominator is the footage time base (the sample rate of an audio layer, the frame
+    /// rate of an image sequence), not the composition timescale.
     pub fn out_point(&self) -> Option<Rational> {
-        self.start.plus_scaled(&self.out_relative, i64::from(self.stretch))
+        self.start.plus_scaled(&self.out_relative, &self.stretch_ratio()?)
     }
 
     /// The absolute in point in seconds.
@@ -402,6 +420,13 @@ pub struct CompHeader {
     pub pixel_aspect: Rational,
     /// The composition's motion blur switch.
     pub motion_blur: bool,
+    /// The shutter phase in degrees (`i32` at byte 180, 0 by default, -90 in the sample); `None`
+    /// when the chunk ends before byte 184.
+    pub shutter_phase: Option<i32>,
+    /// The display start time (the comp start timecode) as `num / den` seconds: `u32` at byte 164
+    /// over `u32` at byte 168 (0/1 by default; display start frame 100 at 25 fps is 102400/25600).
+    /// `None` when the chunk ends before byte 172.
+    pub display_start: Option<Rational>,
 }
 
 impl CompHeader {
@@ -420,6 +445,8 @@ impl CompHeader {
             height: be_u16(cdta, 142)?,
             pixel_aspect: Rational { num: i64::from(be_u32(cdta, 144)?), den: i64::from(be_u32(cdta, 148)?) },
             motion_blur: cdta.get(139)? & 0x08 != 0,
+            shutter_phase: be_i32(cdta, 180),
+            display_start: be_u32(cdta, 164).zip(be_u32(cdta, 168)).map(|(num, den)| Rational { num: i64::from(num), den: i64::from(den) }),
         })
     }
 
@@ -460,6 +487,19 @@ impl CompHeader {
     /// The pixel aspect ratio as a number.
     pub fn pixel_aspect_ratio(&self) -> Option<f64> {
         self.pixel_aspect.to_f64()
+    }
+
+    /// The display start time in seconds (the start timecode), `None` when absent or the
+    /// denominator is zero.
+    pub fn display_start_seconds(&self) -> Option<f64> {
+        self.display_start?.to_f64()
+    }
+
+    /// The display start as a frame number (`display start * frame rate`, rounded); 100 at 25 fps
+    /// for a display start of 4 s.
+    pub fn display_start_frame(&self) -> Option<i64> {
+        let rate = self.frame_rate()?;
+        Some((self.display_start_seconds()? * rate).round() as i64)
     }
 
     /// The frame rate as an exact fraction `timescale / frame_duration`, as typed: 29.97 fps is
