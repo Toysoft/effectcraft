@@ -155,6 +155,25 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("playback.audioPreviewWorkArea", "Preview Audio in the Work Area", [], Some("Ctrl+Cmd+.")),
     uic!("window.moveToMainMonitor", "Move Application Window to the Main Monitor", [], Some("Cmd+Alt+\\")),
     uic!("info.showFilename", "Show the File of the Frame at the Current Time", [], Some("Cmd+Alt+E")),
+    // With a track point pressed in the viewer: the arrow keys move it, at the viewer's
+    // magnification. Alt leaves the attach point where it is.
+    uic!("track.selectPoint", "Select Track Point for the Arrow Keys", [], None),
+    uis!("track.nudge.up", "Move Track Point Up 1 Pixel", "TrackPoint", Some("ArrowUp")),
+    uis!("track.nudge.down", "Move Track Point Down 1 Pixel", "TrackPoint", Some("ArrowDown")),
+    uis!("track.nudge.left", "Move Track Point Left 1 Pixel", "TrackPoint", Some("ArrowLeft")),
+    uis!("track.nudge.right", "Move Track Point Right 1 Pixel", "TrackPoint", Some("ArrowRight")),
+    uis!("track.nudge.up10", "Move Track Point Up 10 Pixels", "TrackPoint", Some("Shift+ArrowUp")),
+    uis!("track.nudge.down10", "Move Track Point Down 10 Pixels", "TrackPoint", Some("Shift+ArrowDown")),
+    uis!("track.nudge.left10", "Move Track Point Left 10 Pixels", "TrackPoint", Some("Shift+ArrowLeft")),
+    uis!("track.nudge.right10", "Move Track Point Right 10 Pixels", "TrackPoint", Some("Shift+ArrowRight")),
+    uis!("track.nudgeRegions.up", "Move Feature and Search Region Up 1 Pixel", "TrackPoint", Some("Alt+ArrowUp")),
+    uis!("track.nudgeRegions.down", "Move Feature and Search Region Down 1 Pixel", "TrackPoint", Some("Alt+ArrowDown")),
+    uis!("track.nudgeRegions.left", "Move Feature and Search Region Left 1 Pixel", "TrackPoint", Some("Alt+ArrowLeft")),
+    uis!("track.nudgeRegions.right", "Move Feature and Search Region Right 1 Pixel", "TrackPoint", Some("Alt+ArrowRight")),
+    uis!("track.nudgeRegions.up10", "Move Feature and Search Region Up 10 Pixels", "TrackPoint", Some("Alt+Shift+ArrowUp")),
+    uis!("track.nudgeRegions.down10", "Move Feature and Search Region Down 10 Pixels", "TrackPoint", Some("Alt+Shift+ArrowDown")),
+    uis!("track.nudgeRegions.left10", "Move Feature and Search Region Left 10 Pixels", "TrackPoint", Some("Alt+Shift+ArrowLeft")),
+    uis!("track.nudgeRegions.right10", "Move Feature and Search Region Right 10 Pixels", "TrackPoint", Some("Alt+Shift+ArrowRight")),
     // With a camera tool: the camera looks at the selected layers, or at all of them.
     uis!("camera.lookAtSelected", "Look at Selected Layers (Camera Tool)", "Camera", Some("F")),
     uis!("camera.lookAtAll", "Look at All Layers (Camera Tool)", "Camera", Some("Cmd+Shift+F")),
@@ -490,6 +509,17 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
     }
     if let Some(dir) = id.strip_prefix("viewer.nudge.") {
         return nudge(app, ctx, dir);
+    }
+    // The arrow keys on the track point pressed in the viewer.
+    if id == "track.selectPoint" {
+        let point = params.get("point").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok());
+        return crate::panels::tracker::select_point(app, point);
+    }
+    if let Some((dir, regions)) = id.strip_prefix("track.nudgeRegions.").map(|d| (d, true)).or_else(|| id.strip_prefix("track.nudge.").map(|d| (d, false))) {
+        let (side, step) = dir.strip_suffix("10").map_or((dir, 1.0), |side| (side, 10.0));
+        // Screen pixels per comp pixel.
+        let zoom = (app.ui.viewer.zoom.unwrap_or_else(|| crate::panels::viewer::last_fit(ctx)) * ctx.pixels_per_point()) as f64;
+        return crate::panels::tracker::nudge(app, side, step, zoom, regions);
     }
     if let Some(k) = id.strip_prefix("timeline.reveal.") {
         if k == "animated" {
@@ -1905,7 +1935,8 @@ fn modifiers_at_start(ctx: &egui::Context) -> Option<egui::Modifiers> {
 
 /// The shortcut contexts active now (`effectcraft_engine::shortcuts::CONTEXT_SCOPES`): text
 /// being edited in the viewer, a paint tool or a camera tool active, a mask selected, a mask, a
-/// shape path or path points selected, a viewer panel focused.
+/// shape path or path points selected, a track point pressed in the viewer, a viewer panel
+/// focused.
 pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
     let mut out = vec![];
     if app.session.state.text_edit.is_some() {
@@ -1925,6 +1956,9 @@ pub fn active_contexts(app: &EffectcraftApp) -> Vec<&'static str> {
     // and a shape layer's Path.)
     if crate::panels::viewer_overlays::free_transform_path(app).is_some() {
         out.push("Path");
+    }
+    if crate::panels::tracker::keyboard_point(app).is_some() {
+        out.push("TrackPoint");
     }
     if matches!(app.ui.focused, PanelKind::Composition | PanelKind::Layer | PanelKind::Footage | PanelKind::Viewer(_)) {
         out.push("Viewer");

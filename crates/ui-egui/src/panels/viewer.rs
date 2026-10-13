@@ -1364,6 +1364,13 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         app.pointer_comp = None;
     }
     app.ui.viewer.interacting = resp.dragged();
+    // A press on a track point gives it the keyboard (the arrow keys move it); a press anywhere
+    // else in the viewer takes it back.
+    if resp.clicked() || resp.drag_started() {
+        let at = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
+        let hit = at.filter(|_| app.ui.tool == Tool::Selection).and_then(|p| super::tracker::hit_at(&track_hits, p));
+        app.ui.viewer.track_point = track_cur.zip(hit).map(|((_, tu), h)| (tu, h.point));
+    }
     let mods = ui.input(|i| i.modifiers);
     let space_pan = super::space_hand(&ctx);
     // Pen tool: each press places a vertex (dragging pulls Bezier tangents); pressing on the

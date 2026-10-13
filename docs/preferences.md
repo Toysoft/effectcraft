@@ -208,7 +208,8 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   Without a double bound, the second press is the chord's own command again.
 - **Scope.** A shortcut belongs to the application, to a panel (Project, Timeline, Composition,
   Render Queue…) or to a context (editing text, a paint tool or a camera tool active, a mask,
-  a shape path or points of a path selected). One chord can be bound once per scope, and the narrowest active scope runs it: an
+  a shape path or points of a path selected, a track point pressed in the viewer). One chord
+  can be bound once per scope, and the narrowest active scope runs it: an
   active context, then the panel with the keyboard, then the application. The Timeline and the
   Composition panel share their shortcuts. A context's shortcuts work only while it is active;
   a panel's shortcut that nothing nearer claims still works from the other panels.
@@ -221,7 +222,12 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   the free-transform box around them in the viewer instead of choosing the Type tool: drag
   inside to move, a handle to scale, outside a corner to rotate; Esc, Enter or a click away
   ends it. *Paint*: with a paint tool X swaps the colours, D makes
-  them black and white, and 3–7 pick a Clone Stamp preset.
+  them black and white, and 3–7 pick a Clone Stamp preset. *Track Point*: a press on a track
+  point in the viewer (its regions are drawn heavier) gives it the arrow keys until a press
+  elsewhere in the viewer. They move its feature region, search region and attach point by
+  1 pixel at the viewer's magnification, 10 with Shift (`track.nudge.*`); with Alt the two
+  regions move and the attach point stays (`track.nudgeRegions.*`). Without such a point the
+  arrows nudge the selected layers.
 - **While a shape is dragged out** with a shape tool, before the mouse button is released
   (these keys are fixed, not in the preset): Up / Down add or remove a point of a polygon or
   star, or make a rounded rectangle's corners rounder or sharper by 10%; Left / Right lower or
