@@ -2430,10 +2430,26 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     }
                     app.auto.add(&format!("timeline.prop.{uid}.addKey"), mid, "Add or remove keyframe");
                 }
+                // Twirl arrow for expression when the property has one (AE parity).
+                if prop.has_expression() {
+                    let tw = Rect::from_center_size(pos2(indent, cy), vec2(13.0, 13.0));
+                    let is_open = !app.ui.timeline.expr_closed.contains(uid);
+                    if widgets::twirl(ui, tw, is_open, egui::Id::new(("ptw", uid)), &t).clicked() {
+                        if is_open {
+                            app.ui.timeline.expr_closed.insert(*uid);
+                        } else {
+                            app.ui.timeline.expr_closed.remove(uid);
+                        }
+                    }
+                    let prop_path = layer.props.match_path_of(*uid).unwrap_or_else(|| prop.name.clone());
+                    let label = format!("Twirl expression: {prop_path}");
+                    app.auto.add(&format!("timeline.prop.{uid}.exprTwirl"), tw, &label);
+                }
                 // Stopwatch: Alt+click adds an expression; a press toggles the animation, and
                 // dragging on over other stopwatches gives them the same state (#284).
                 if !prop.static_only {
-                    let swr = Rect::from_center_size(pos2(indent, cy), vec2(15.0, 15.0));
+                    let sw_x = if prop.has_expression() { indent + 16.0 } else { indent };
+                    let swr = Rect::from_center_size(pos2(sw_x, cy), vec2(15.0, 15.0));
                     let resp = ui.interact(swr, egui::Id::new(("stopwatch", uid)), Sense::click_and_drag());
                     let col = if prop.is_animated() {
                         t.hot_text
@@ -2455,7 +2471,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         actions.push(("prop.toggleAnimation".into(), json!({"layer": layer.id.0, "prop": uid})));
                     }
                 }
-                let name_x = indent + 12.0;
+                let name_x = if prop.has_expression() { indent + 28.0 } else { indent + 12.0 };
                 // 3D layers show Rotation as "Z Rotation" next to X/Y Rotation.
                 let is_tr_rot = layer.transform().and_then(|t| t.get("rotation")).is_some_and(|r| r.uid == prop.uid);
                 let base = if is_tr_rot && prop.name == "Rotation" && layer.is_3d() { "Z Rotation".to_string() } else { prop.name.clone() };

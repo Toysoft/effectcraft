@@ -515,3 +515,41 @@ fn arrow_keys_move_the_caret_in_rename_fields() {
     let layer_name = h.state().session.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(layer)).unwrap().name.clone();
     assert_eq!(layer_name, "Pla-te");
 }
+
+#[test]
+fn the_expression_twirl_collapses_and_expands_the_expression_row() {
+    let (mut h, _) = harness();
+    let (layer, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": "time * 10"})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+
+    let expr_id = format!("timeline.prop.{opacity}.expression");
+    let twirl_id = format!("timeline.prop.{opacity}.exprTwirl");
+
+    // Initially expanded: expression editor row is present.
+    assert!(h.state().auto.find(&expr_id).is_some());
+    assert!(!h.state().ui.timeline.expr_closed.contains(&opacity));
+    assert_eq!(h.state().auto.find(&twirl_id).unwrap().label, "Twirl expression: transform/opacity");
+
+    // Clicking the twirl collapses the expression row.
+    let twirl_pos = center(&h, &twirl_id);
+    click(&mut h, twirl_pos, 1);
+    h.run_steps(2);
+
+    assert!(h.state().ui.timeline.expr_closed.contains(&opacity));
+    assert!(h.state().auto.find(&expr_id).is_none());
+
+    // Clicking again expands it back.
+    click(&mut h, twirl_pos, 1);
+    h.run_steps(2);
+
+    assert!(!h.state().ui.timeline.expr_closed.contains(&opacity));
+    assert!(h.state().auto.find(&expr_id).is_some());
+}
