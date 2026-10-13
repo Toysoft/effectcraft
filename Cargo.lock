@@ -1167,6 +1167,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "effectcraft-aep"
+version = "0.9.2"
+
+[[package]]
 name = "effectcraft-automation"
 version = "0.9.2"
 dependencies = [
