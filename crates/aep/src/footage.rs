@@ -159,3 +159,37 @@ impl<'f, 'a> Project<'f, 'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::json_string;
+
+    #[test]
+    fn reads_a_string_with_escapes() {
+        let json = br#"{"a":1,"fullpath":"C:\\dir\\f\u00e9.png","b":"x"}"#;
+        assert_eq!(json_string(json, "fullpath").as_deref(), Some(r"C:\dir\fé.png"));
+        assert_eq!(json_string(json, "b").as_deref(), Some("x"));
+        assert_eq!(json_string(json, "missing"), None);
+        assert_eq!(json_string(br#"{"a" : "spaced"}"#, "a").as_deref(), Some("spaced"));
+    }
+
+    #[test]
+    fn damaged_json_never_panics() {
+        for json in [
+            &br#"{"fullpath":"#[..],
+            br#"{"fullpath":"abc"#,
+            br#"{"fullpath":"ab\"#,
+            br#"{"fullpath":"\u12"}"#,
+            br#"{"fullpath":"\uzzzz"}"#,
+            br#"{"fullpath":5}"#,
+            br#"{"fullpath"}"#,
+            b"\"fullpath\"",
+            b"",
+            b"\"",
+            br#"{"fullpath":"\ud800"}"#,
+        ] {
+            let _ = json_string(json, "fullpath");
+        }
+        assert_eq!(json_string(br#"{"fullpath":"\ud800"}"#, "fullpath").as_deref(), Some("\u{fffd}"));
+    }
+}
