@@ -121,9 +121,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("tool.selection", "Selection Tool", [], Some("V")),
     uic!("tool.hand", "Hand Tool", [], Some("H")),
     uic!("tool.zoom", "Zoom Tool", [], Some("Z")),
-    uic!("tool.orbit", "Orbit Tool", [], Some("1")),
-    uic!("tool.panCamera", "Pan Camera Tool", [], Some("2")),
-    uic!("tool.dolly", "Dolly Tool", [], Some("3")),
+    // (With a camera tool; otherwise 1–9 go to the numbered composition markers.)
+    uis!("tool.orbit", "Orbit Tool", "Camera", Some("1")),
+    uis!("tool.panCamera", "Pan Camera Tool", "Camera", Some("2")),
+    uis!("tool.dolly", "Dolly Tool", "Camera", Some("3")),
     uic!("tool.camera", "Camera Tools", [], Some("C")),
     uic!("tool.rotate", "Rotation Tool", [], Some("W")),
     uic!("tool.panBehind", "Pan Behind Tool", [], Some("Y")),
@@ -138,6 +139,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("app.solidSettings", "New Solid...", [], None),
     uic!("app.home", "Home", [], None),
     uic!("markers.dialog", "Marker Settings...", [], None),
+    uic!("markers.addWithDialog", "Add Marker and Open Marker Settings", [], Some("Ctrl+Alt+8")),
     uic!("window.maximizePanel", "Maximize Panel Under Pointer", [], Some("`")),
     uic!("window.maximizeApp", "Maximize or Restore Application Window", [], Some("Cmd+\\")),
     uic!("window.toggleCompTimeline", "Switch Between Composition and Timeline Panel", [], Some("\\")),
@@ -148,6 +150,15 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     uic!("window.floatPanel", "Undock Panel", [], None),
     uic!("window.closePanel", "Close Panel", [], None),
     uic!("window.panelWindow", "Move Panel to New Window", [], None),
+    uic!("view.proportionalGrid", "Proportional Grid", [], Some("Alt+'")),
+    uic!("playback.audioPreview", "Preview Audio from the Current Time", [], Some("Ctrl+.")),
+    uic!("playback.audioPreviewWorkArea", "Preview Audio in the Work Area", [], Some("Ctrl+Cmd+.")),
+    uic!("window.moveToMainMonitor", "Move Application Window to the Main Monitor", [], Some("Cmd+Alt+\\")),
+    uic!("info.showFilename", "Show the File of the Frame at the Current Time", [], Some("Cmd+Alt+E")),
+    // With a camera tool: the camera looks at the selected layers, or at all of them.
+    uis!("camera.lookAtSelected", "Look at Selected Layers (Camera Tool)", "Camera", Some("F")),
+    uis!("camera.lookAtAll", "Look at All Layers (Camera Tool)", "Camera", Some("Cmd+Shift+F")),
+    uis!("effectControls.twirlSelected", "Twirl Selected Effects Open / Closed", "EffectControls", Some("Cmd+`")),
     // The formatting shortcuts of the text being edited in a viewer.
     uis!("text.format.alignLeft", "Align Text Left / Top", "TextEditing", Some("Cmd+Shift+L")),
     uis!("text.format.alignCenter", "Align Text Center", "TextEditing", Some("Cmd+Shift+C")),
@@ -596,6 +607,26 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             }
         }
     }
+    if id == "markers.addWithDialog" {
+        // On the first selected layer, else on the composition; then its dialog.
+        let layer = app.session.state.selected_layers.first().copied();
+        let times = |app: &EffectcraftApp| -> Vec<effectcraft_engine::time::Tick> {
+            let Some(c) = app.session.active_comp() else { return vec![] };
+            match layer.and_then(|l| c.layer(l)) {
+                Some(l) => l.markers.iter().map(|m| m.time).collect(),
+                None => c.markers.iter().map(|m| m.time).collect(),
+            }
+        };
+        let before = times(app);
+        match layer {
+            Some(l) => run_engine(app, ctx, "layer.addMarker", json!({"layers": [l.0]}))?,
+            None => run_engine(app, ctx, "comp.addMarker", json!({}))?,
+        };
+        let after = times(app);
+        let index = (0..after.len()).find(|i| before.get(*i) != after.get(*i)).ok_or("no marker was added")?;
+        crate::panels::markers_ui::open_dialog(app, crate::panels::markers_ui::MarkerRef { layer: layer.map(|l| l.0), index })?;
+        return Ok(json!({"dialog": "markers.dialog", "index": index}));
+    }
     if id == "markers.dialog" {
         // The Composition/Layer Marker dialog (double-click a marker): {layer?, index}.
         let index = params.get("index").and_then(Value::as_u64).ok_or("markers.dialog: need `index`")? as usize;
@@ -639,6 +670,56 @@ pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: V
             app.ui.viewer.fit_up_to_100 = false;
             app.ui.viewer.pan = [0.0, 0.0];
             return Ok(Value::Null);
+        }
+        "view.proportionalGrid" => {
+            app.ui.viewer.proportional_grid = !app.ui.viewer.proportional_grid;
+            return Ok(json!(app.ui.viewer.proportional_grid));
+        }
+        "playback.audioPreview" | "playback.audioPreviewWorkArea" => {
+            app.toggle_audio_preview(now, id == "playback.audioPreviewWorkArea");
+            return Ok(json!({"playing": app.playback.playing}));
+        }
+        // To the main monitor's origin, filling it (the windowing layer has no "which monitor").
+        "window.moveToMainMonitor" => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            return Ok(json!({"maximized": true}));
+        }
+        // The file behind the selected footage layer's frame, in the status line.
+        "info.showFilename" => {
+            let r = run_engine(app, ctx, "layer.frameFile", json!({}))?;
+            if let Some(f) = r["file"].as_str() {
+                app.ui.status = f.to_string();
+            }
+            return Ok(r);
+        }
+        "camera.lookAtSelected" => return run_engine(app, ctx, "view.lookAtSelected", json!({})),
+        "camera.lookAtAll" => return run_engine(app, ctx, "view.lookAtAll", json!({})),
+        "effectControls.twirlSelected" => {
+            // The selected effects of the first selected layer, else all of its effects: open
+            // them all, or close them all when every one is open.
+            let sel = &app.session.state;
+            let effects: Vec<u64> = app
+                .session
+                .active_comp()
+                .and_then(|c| sel.selected_layers.first().and_then(|id| c.layer(*id)))
+                .and_then(|l| l.effects().map(|fx| (l.id, fx.groups().map(|g| g.uid).collect::<Vec<_>>())))
+                .map(|(lid, all)| {
+                    let picked: Vec<u64> = all.iter().copied().filter(|u| sel.selected_props.contains(&(lid, *u))).collect();
+                    if picked.is_empty() { all } else { picked }
+                })
+                .unwrap_or_default();
+            let close = effects.iter().all(|u| !app.ui.fx_closed.contains(u));
+            for u in &effects {
+                if close {
+                    app.ui.fx_closed.insert(*u);
+                } else {
+                    app.ui.fx_closed.remove(u);
+                }
+            }
+            return Ok(json!({"effects": effects.len(), "open": !close}));
         }
         id if id.starts_with("text.format.") => {
             return crate::panels::text_panels::format(app, ctx, id.trim_start_matches("text.format."));
@@ -1783,7 +1864,7 @@ fn chord_bindings(session: &effectcraft_engine::Session, doubles: bool) -> Vec<B
     v
 }
 
-fn mods_match(want: egui::Modifiers, got: egui::Modifiers) -> bool {
+pub(crate) fn mods_match(want: egui::Modifiers, got: egui::Modifiers) -> bool {
     want.command == got.command && want.shift == got.shift && want.alt == got.alt && (want.ctrl == got.ctrl || got.command && cfg!(not(target_os = "macos")))
 }
 
@@ -1852,11 +1933,23 @@ pub fn context_binding(app: &EffectcraftApp, scope: &str, key: egui::Key, mods: 
         .map(|(_, _, id, _)| id)
 }
 
+/// How long a tool's key is held before its release gives the previous tool back, in seconds.
+pub const MOMENTARY_TOOL: f64 = 0.35;
+
+fn momentary_tool_id() -> egui::Id {
+    egui::Id::new("shortcut-momentary-tool")
+}
+
 /// How soon the second press of a double press (`AA`) follows the first, in seconds.
 pub const DOUBLE_PRESS: f64 = 0.6;
 
 fn double_press_id() -> egui::Id {
     egui::Id::new("shortcut-double-press")
+}
+
+/// Whether the active preset binds `key` + `mods` to anything.
+fn context_free_binding(app: &EffectcraftApp, key: egui::Key, mods: egui::Modifiers) -> bool {
+    bindings(&app.session).iter().any(|(m, k, ..)| *k == key && mods_match(*m, mods))
 }
 
 /// Only Shift held (Shift+Delete, not Ctrl/Alt+Shift+Delete).
@@ -1973,7 +2066,11 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
     events.retain(|(key, _, _, _)| (*key == egui::Key::Tab) == tab_only);
     // Numpad * (or `*` typed with Shift+8): Add Marker (#275). egui has no key for it, so it
     // comes as text.
-    if !tab_only && clipboard && app.dialog.is_none() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == "*"))) {
+    // (Not the `*` of a Shift+8 that is itself a shortcut: Set Composition Marker 8.)
+    let star_key = ctx
+        .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Num8, pressed: true, modifiers, .. } if modifiers.shift)))
+        && context_free_binding(app, egui::Key::Num8, egui::Modifiers::SHIFT);
+    if !tab_only && !star_key && clipboard && app.dialog.is_none() && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == "*"))) {
         let bound = app.session.shortcuts().bindings().into_iter().find(|(k, _)| *k == "Num*").map(|(_, b)| (b.command.clone(), b.params.clone()));
         // As in After Effects, it marks the selected layers; only with none selected does it add
         // a composition marker (#976).
@@ -1982,6 +2079,17 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
             && let Err(e) = invoke(app, ctx, &id, if params.is_null() { json!({}) } else { params })
         {
             app.ui.status = e;
+        }
+    }
+    // A tool's key held down: the tool is active until the key is released, then the tool
+    // from before comes back. A tap keeps the tool.
+    if !tab_only
+        && let Some((key, previous, at)) = ctx.data(|d| d.get_temp::<(egui::Key, Tool, f64)>(momentary_tool_id()))
+        && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: false, .. } if *k == key)))
+    {
+        ctx.data_mut(|d| d.remove::<(egui::Key, Tool, f64)>(momentary_tool_id()));
+        if ctx.input(|i| i.time) - at >= MOMENTARY_TOOL {
+            app.ui.tool = previous;
         }
     }
     if events.is_empty() {
@@ -2117,8 +2225,12 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
             .filter(|(m, k, ..)| *k == key && mods_match(*m, mods))
             .filter_map(|(_, _, id, params)| rank(id, params).map(|r| (r, id, params)))
             .min_by_key(|(r, ..)| *r);
+        // Show Snapshot works while its key is held (the viewer watches the key).
+        let chosen = chosen.filter(|(_, id, _)| !id.starts_with("view.showSnapshot"));
         if let Some((_, id, params)) = chosen {
             let (id, params) = (marker_command(app, id.clone()), if params.is_null() { json!({}) } else { params.clone() });
+            // (A tool on a bare key can be held for a moment's use.)
+            let tool_before = (id.starts_with("tool.") && !mods.any()).then_some(app.ui.tool);
             if id == "edit.paste"
                 && let Some(t) = &pasted
             {
@@ -2126,6 +2238,9 @@ fn handle_shortcuts_impl(app: &mut EffectcraftApp, ctx: &egui::Context, tab_only
             }
             if let Err(e) = invoke(app, ctx, &id, params) {
                 app.ui.status = e;
+            }
+            if let Some(previous) = tool_before.filter(|t| *t != app.ui.tool) {
+                ctx.data_mut(|d| d.insert_temp(momentary_tool_id(), (key, previous, now)));
             }
             ctx.data_mut(|d| d.remove_temp::<String>(system_paste_id()));
         }

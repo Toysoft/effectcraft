@@ -200,3 +200,98 @@ fn a_double_press_runs_its_own_binding() {
     press_at(&ctx, &mut app, Key::P, 20.2);
     assert_eq!(app.ui.timeline.reveal, ["position"], "P again, not PP");
 }
+
+/// The Show Snapshot keys show while held: pressing one doesn't switch Show Snapshot on.
+#[test]
+fn a_show_snapshot_key_does_not_latch() {
+    let mut app = app();
+    app.session.execute("view.takeSnapshot", json!({"scale": 0.25})).unwrap();
+    app.session.execute("view.takeSnapshot2", json!({"scale": 0.25})).unwrap();
+    for key in [Key::F5, Key::F6] {
+        press(&mut app, key, Modifiers::NONE);
+        assert!(!app.session.state.viewer.show_snapshot, "{key:?}");
+    }
+    // Shift+F7 takes slot 3; Cmd+Shift+F6 purges slot 2.
+    press(&mut app, Key::F7, Modifiers::SHIFT);
+    press(&mut app, Key::F6, Modifiers::COMMAND | Modifiers::SHIFT);
+    let filled: Vec<bool> = app.session.snapshot_slots.iter().map(Option::is_some).collect();
+    assert_eq!(filled, [true, false, true, false]);
+}
+
+/// Cmd+` in the Effect Controls panel twirls the layer's effects; in the Timeline, the layer.
+#[test]
+fn effect_controls_twirls_its_effects() {
+    let mut app = app();
+    app.session.execute("edit.selectAll", json!({})).unwrap();
+    app.session.execute("effect.apply", json!({"effect": "Tint"})).unwrap();
+    let fx = app.session.active_comp().unwrap().layers[0].effects().unwrap().groups().next().unwrap().uid;
+    app.ui.focused = PanelKind::EffectControls;
+    press(&mut app, Key::Backtick, Modifiers::COMMAND);
+    assert!(app.ui.fx_closed.contains(&fx), "open effects close");
+    press(&mut app, Key::Backtick, Modifiers::COMMAND);
+    assert!(!app.ui.fx_closed.contains(&fx));
+    app.ui.focused = PanelKind::Timeline;
+    press(&mut app, Key::Backtick, Modifiers::COMMAND);
+    assert!(!app.ui.fx_closed.contains(&fx), "the Timeline's Cmd+` leaves Effect Controls alone");
+}
+
+/// 1–9 go to the numbered composition markers; with a camera tool 1, 2 and 3 pick the tool.
+#[test]
+fn digits_go_to_markers_unless_a_camera_tool_is_active() {
+    use effectcraft_ui_egui::state::Tool;
+    let mut app = app();
+    app.session.execute("edit.deselectAll", json!({})).unwrap();
+    app.session.execute("time.set", json!({"time": 3.0})).unwrap();
+    press(&mut app, Key::Num2, Modifiers::SHIFT);
+    let marks: Vec<String> = app.session.active_comp().unwrap().markers.iter().map(|m| m.comment.clone()).collect();
+    assert_eq!(marks, ["2"], "Shift+2 sets marker 2");
+    app.session.execute("time.set", json!({"time": 0.0})).unwrap();
+    press(&mut app, Key::Num2, Modifiers::NONE);
+    assert_eq!(app.session.time().seconds(), 3.0);
+    assert_eq!(app.ui.tool, Tool::Selection);
+    // A camera tool: 2 is the Pan Camera tool, and the time stays.
+    app.ui.tool = Tool::Orbit;
+    app.session.execute("time.set", json!({"time": 0.0})).unwrap();
+    press(&mut app, Key::Num2, Modifiers::NONE);
+    assert_eq!((app.ui.tool, app.session.time().seconds()), (Tool::PanCamera, 0.0));
+}
+
+#[test]
+fn alt_apostrophe_shows_the_proportional_grid() {
+    let mut app = app();
+    app.ui.focused = PanelKind::Composition;
+    press(&mut app, Key::Quote, Modifiers::ALT);
+    assert!(app.ui.viewer.proportional_grid);
+    press(&mut app, Key::Quote, Modifiers::ALT);
+    assert!(!app.ui.viewer.proportional_grid);
+}
+
+/// One key event at `time` seconds in `ctx`.
+fn key_event(ctx: &egui::Context, app: &mut EffectcraftApp, key: Key, pressed: bool, time: f64) {
+    let raw = egui::RawInput {
+        time: Some(time),
+        events: vec![egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }],
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(raw, |ui| effectcraft_ui_egui::menus::handle_shortcuts(app, ui.ctx()));
+    output.textures_delta.clear();
+}
+
+/// A tool's key held down gives the tool until it is released; a tap keeps the tool.
+#[test]
+fn a_held_tool_key_is_the_tool_for_a_moment() {
+    use effectcraft_ui_egui::state::Tool;
+    let mut app = app();
+    let ctx = egui::Context::default();
+    key_event(&ctx, &mut app, Key::H, true, 1.0);
+    assert_eq!(app.ui.tool, Tool::Hand);
+    key_event(&ctx, &mut app, Key::H, false, 2.0);
+    assert_eq!(app.ui.tool, Tool::Selection, "held: back to the tool from before");
+    key_event(&ctx, &mut app, Key::H, true, 3.0);
+    key_event(&ctx, &mut app, Key::H, false, 3.1);
+    assert_eq!(app.ui.tool, Tool::Hand, "tapped: the tool stays");
+    // The key of the tool that is already active changes nothing on release.
+    key_event(&ctx, &mut app, Key::H, true, 5.0);
+    key_event(&ctx, &mut app, Key::H, false, 6.0);
+    assert_eq!(app.ui.tool, Tool::Hand);
+}

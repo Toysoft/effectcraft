@@ -53,10 +53,14 @@ const SCOPES: &[(&str, &str)] = &[
     ("project.deleteWithoutConfirmation", "Project"),
     ("renderQueue.duplicate", "RenderQueue"),
     ("view.newViewer", "Viewer"),
+    ("roto.showAlphaBoundary", "Layer"),
+    ("roto.showAlphaOverlay", "Layer"),
     // The mode of the selected mask: single letters, the Timeline's reveal keys otherwise.
     ("layer.mask.mode", "Mask"),
     // With a paint tool: the colours and the Clone Stamp presets.
     ("paint.swapColors", "Paint"),
+    ("paint.stepEarlier", "Paint"),
+    ("paint.stepLater", "Paint"),
     ("paint.defaultColors", "Paint"),
     ("paint.clonePreset1", "Paint"),
     ("paint.clonePreset2", "Paint"),

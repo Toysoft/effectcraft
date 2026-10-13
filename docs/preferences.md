@@ -218,6 +218,14 @@ entries with bound parameters and the frontend's tool / panel commands), and a p
   the paragraph composer). *Mask*: with a mask selected (the mask, not one of its properties)
   N, A, S, I, D and F set its mode. *Paint*: with a paint tool X swaps the colours, D makes
   them black and white, and 3–7 pick a Clone Stamp preset.
+- **Held keys.** A tool's bare key held for 0.35 s or longer gives the tool until the key is
+  released, then the tool from before comes back; a tap keeps the tool. The Show Snapshot keys
+  (F5–F8, slots 1–4) show their snapshot while held; Shift takes the slot and Cmd+Shift purges
+  it.
+- **Digits.** 1–9 go to the numbered composition markers and Shift+1–9 set them (one of each
+  number; setting one again moves it). With a camera tool 1, 2 and 3 are Orbit, Pan and Dolly;
+  with a paint tool 1 and 2 step the time by the stroke duration and 3–7 pick a Clone Stamp
+  preset. `0` stays the preview key, as the keypad's 0 can't be told from it.
 - **Numeric keypad.** The windowing layer reports a keypad key as its main-keyboard key, so
   `Num0` is also the main `0`; only `Num*` is told apart (it arrives as text). The shortcuts
   that need a keypad key have main-keyboard keys on macOS, where Control is a key of its own:
