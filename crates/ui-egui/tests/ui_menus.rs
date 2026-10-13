@@ -332,3 +332,15 @@ fn pointer_reentering_over_another_title_switches_menus() {
     assert!(shown(&h, "Keyboard Shortcuts"), "coming back over Edit opened it");
     assert!(!shown(&h, "Open Project"), "and closed File");
 }
+
+/// The keyboard takes over a menu opened by hovering: Up highlights its last entry.
+#[test]
+fn arrow_keys_work_in_a_menu_opened_by_hovering() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    hover(&mut h, edit.center());
+    key(&mut h, Key::ArrowUp);
+    let last = if cfg!(target_os = "macos") { "Keyboard Shortcuts" } else { "Preferences" };
+    assert!(focused(&h).starts_with(last), "Up went to Edit's last entry: {:?}", focused(&h));
+}
