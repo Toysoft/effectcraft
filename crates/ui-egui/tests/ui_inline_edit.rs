@@ -587,3 +587,165 @@ fn collapsed_expression_hint_does_not_overlap_keyframes() {
     // The expression hint must end before the first keyframe.
     assert!(hint_rect[0] + hint_rect[2] <= first_key_x, "hint right edge {} must not exceed first keyframe x {}", hint_rect[0] + hint_rect[2], first_key_x);
 }
+
+#[test]
+fn long_expressions_do_not_overflow_layer_rows_and_are_bounded() {
+    let (mut h, _) = harness();
+    let (layer1, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Solid 1", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        // A 25-line expression.
+        let expr = (1..=25).map(|i| format!("// line {i}")).collect::<Vec<_>>().join("\n");
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": expr})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    let layer2 = h.state_mut().session.execute("layer.newSolid", json!({"name": "Solid 2", "color": "#804060"})).unwrap()["layer"].as_u64().unwrap();
+    h.state_mut().ui.timeline.open_layers.insert(layer1);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+    let expr_id = format!("timeline.prop.{opacity}.expression");
+    let expr_rect = h.state().auto.find(&expr_id).unwrap().rect;
+    let line_h = h.state().tokens.row_h;
+    // The expression row should be capped at EXPR_AUTO_LINES (8 lines), not 25 lines tall!
+    assert!(expr_rect[3] <= line_h * 9.0, "expression height {} exceeds auto limit", expr_rect[3]);
+    let layer2_rect = h.state().auto.find(&format!("timeline.layer.{layer2}.row")).unwrap().rect;
+    // Layer 2 must sit right below the bounded expression row, NOT pushed 25 lines down!
+    assert!(layer2_rect[1] < expr_rect[1] + expr_rect[3] + line_h * 2.0);
+}
+
+#[test]
+fn scrolling_inside_expression_editor_does_not_scroll_timeline_layers() {
+    let (mut h, _) = harness();
+    let (layer, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        let expr = (1..=20).map(|i| format!("// line {i}")).collect::<Vec<_>>().join("\n");
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": expr})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+    let expr_id = format!("timeline.prop.{opacity}.expression");
+    let expr_pos = center(&h, &expr_id);
+    let initial_scroll = h.state().ui.timeline.scroll_y;
+
+    // Move pointer over expression editor and scroll wheel.
+    h.input_mut().events.push(Event::PointerMoved(expr_pos));
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -50.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(2);
+
+    // Timeline layers scroll position should NOT change.
+    assert_eq!(h.state().ui.timeline.scroll_y, initial_scroll);
+}
+
+#[test]
+fn scrolling_over_short_expression_editor_scrolls_timeline_layers() {
+    let (mut h, _) = harness();
+    let (layer, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        // Add background layers so the timeline layers area can scroll.
+        for i in 1..=15 {
+            s.execute("layer.newSolid", json!({"name": format!("BG {i}"), "color": "#202020"})).unwrap();
+        }
+        let l = s.execute("layer.newSolid", json!({"name": "Plate", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": "50 + 50"})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+    let expr_id = format!("timeline.prop.{opacity}.expression");
+    let expr_pos = center(&h, &expr_id);
+    let initial_scroll = h.state().ui.timeline.scroll_y;
+
+    // Move pointer over short expression editor and scroll wheel.
+    h.input_mut().events.push(Event::PointerMoved(expr_pos));
+    h.input_mut().events.push(Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -50.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(2);
+
+    // Because the short expression has no overflow, the mouse wheel must scroll the Timeline!
+    assert!(
+        h.state().ui.timeline.scroll_y > initial_scroll,
+        "timeline scroll_y {} should have scrolled past initial {}",
+        h.state().ui.timeline.scroll_y,
+        initial_scroll
+    );
+}
+
+#[test]
+fn expression_editor_horizontal_navigation_and_bounds() {
+    let (mut h, _) = harness();
+    let (layer, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Solid", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        // A single very long line.
+        let expr = "n = 0; // ".to_string() + &"x".repeat(300);
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": expr})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+
+    let expr_id = format!("timeline.prop.{opacity}.expression");
+    let expr_rect = h.state().auto.find(&expr_id).expect("expression editor should be open").rect;
+
+    // Focus editor and press End key to navigate to the end of the long line.
+    let p = center(&h, &expr_id);
+    click(&mut h, p, 1);
+    key(&mut h, Key::End);
+    h.run_steps(2);
+
+    // Verify editor has focus and keyboard.
+    assert!(h.ctx.egui_wants_keyboard_input(), "expression editor retains focus after navigating to end of line");
+
+    // The editor's auto rect must stay bounded inside the timeline row area.
+    assert!(expr_rect[2] > 100.0, "editor has visible width");
+}
+
+#[test]
+fn drag_selecting_outside_expression_editor_scrolls_and_expands_selection() {
+    let (mut h, _) = harness();
+    let (layer, opacity, transform) = {
+        let s = &mut h.state_mut().session;
+        let l = s.execute("layer.newSolid", json!({"name": "Solid", "color": "#406080"})).unwrap()["layer"].as_u64().unwrap();
+        // A 20-line expression.
+        let expr = (1..=20).map(|i| format!("line_{i}_code = {i};")).collect::<Vec<_>>().join("\n");
+        s.execute("prop.setExpression", json!({"layer": l, "path": "transform/opacity", "expression": expr})).unwrap();
+        let tr = s.active_comp().unwrap().layer(effectcraft_engine::project::LayerId(l)).unwrap().props.sub("transform").unwrap().clone();
+        (l, tr.get("opacity").unwrap().uid, tr.uid)
+    };
+    h.state_mut().ui.timeline.open_layers.insert(layer);
+    h.state_mut().ui.timeline.open_groups.insert(transform);
+    h.run_steps(3);
+
+    let expr_id = format!("timeline.prop.{opacity}.expression");
+    let expr_rect = h.state().auto.find(&expr_id).expect("expression editor should be open").rect;
+    let from = pos2(expr_rect[0] + 30.0, expr_rect[1] + 5.0);
+    // Drag downwards well below the bottom of the editor.
+    let to = pos2(expr_rect[0] + 30.0, expr_rect[1] + expr_rect[3] + 40.0);
+
+    drag(&mut h, from, to);
+    h.run_steps(3);
+
+    // Verify that selection range expanded significantly into the expression text.
+    let edit_id = egui::Id::new(("expr-edit", opacity));
+    let st = egui::text_edit::TextEditState::load(&h.ctx, edit_id).expect("editor state exists");
+    let range = st.cursor.char_range().expect("text selection range exists");
+    assert!(range.primary.index.0 > 80, "selection primary index {} should have scrolled past initial lines", range.primary.index.0);
+}

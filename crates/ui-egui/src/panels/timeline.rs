@@ -1691,15 +1691,35 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             // Alt+wheel zooms around the pointer, out until the whole comp shows.
             set_zoom(&mut app.ui.timeline, &comp, tm.pps * (dy as f64 / 200.0).exp(), fit_pps, tm.t(at_x), (at_x - tm.x0) as f64);
         } else {
-            let over_outline = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| p.x < graph_x0);
+            let ptr = ui.input(|i| i.pointer.hover_pos());
+            let over_outline = ptr.is_some_and(|p| p.x < graph_x0);
+            let over_expr_editor = ptr.is_some_and(|p| {
+                if p.x < graph_x0 || !rows_rect.contains(p) {
+                    return false;
+                }
+                let mut yy = rows_rect.min.y - app.ui.timeline.scroll_y;
+                for row in &rows {
+                    let hh = row_height(row, rh);
+                    if let RowKind::Expr { uid, lines } = row.kind
+                        && p.y >= yy
+                        && p.y < yy + hh
+                    {
+                        let has_more_lines =
+                            comp.layer(row.layer).and_then(|l| l.props.find(uid)).and_then(|p| p.expr.as_ref()).is_some_and(|e| e.text.lines().count() > lines);
+                        return has_more_lines;
+                    }
+                    yy += hh;
+                }
+                false
+            });
             let shift = ui.input(|i| i.modifiers.shift);
             if over_outline && overflow > 0.0 && (dx.abs() > 0.0 || (shift && dy.abs() > 0.0)) {
                 let d = if dx.abs() > 0.0 { dx } else { dy };
                 app.ui.timeline.outline_scroll = (app.ui.timeline.outline_scroll - d).clamp(0.0, overflow);
-            } else {
+            } else if !over_expr_editor {
                 app.ui.timeline.scroll_y = (app.ui.timeline.scroll_y - dy).clamp(0.0, max_scroll);
             }
-            if dx.abs() > 0.0 && app.ui.timeline.pps.is_some() && !over_outline {
+            if dx.abs() > 0.0 && app.ui.timeline.pps.is_some() && !over_outline && !over_expr_editor {
                 app.ui.timeline.start = (app.ui.timeline.start - dx as f64 / pps).max(0.0);
             }
         }

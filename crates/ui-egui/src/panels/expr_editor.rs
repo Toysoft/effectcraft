@@ -312,10 +312,12 @@ pub fn editor(ui: &mut egui::Ui, id: egui::Id, buf: &mut String, rect: Rect, p: 
     let pc = p.clone();
     let sx = Syntax::for_tokens(t);
     let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| {
+        let wrap = if pc.word_wrap { er.width() } else { wrap };
         let job = layout(text.as_str(), font.clone(), color, &sx, &pc, brackets, wrap);
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(er));
+    child.set_clip_rect(er);
     // Auto-complete: Tab accepts the first candidate (consumed before the editor sees it).
     let mut accepted = None;
     if p.auto_complete
@@ -331,29 +333,78 @@ pub fn editor(ui: &mut egui::Ui, id: egui::Id, buf: &mut String, rect: Rect, p: 
             accepted = Some(c + first.chars().count() - word.chars().count());
         }
     }
-    let out = egui::TextEdit::multiline(buf)
-        .id(id)
-        .font(Tokens::mono(size))
-        .desired_width(er.width())
-        .desired_rows(rows)
-        .frame(egui::Frame::NONE)
-        .lock_focus(true)
-        .layouter(&mut layouter)
-        .show(&mut child);
+    let scroll_out =
+        egui::ScrollArea::both().id_salt(id.with("scroll")).max_width(er.width()).max_height(er.height()).auto_shrink([false, false]).show(&mut child, |ui| {
+            egui::TextEdit::multiline(buf)
+                .id(id)
+                .font(Tokens::mono(size))
+                .desired_width(er.width())
+                .desired_rows(rows)
+                .frame(egui::Frame::NONE)
+                .lock_focus(true)
+                .layouter(&mut layouter)
+                .show(ui)
+        });
+    let out = scroll_out.inner;
     if let Some(c) = accepted {
         let mut st = out.state.clone();
         st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(c))));
         st.store(ui.ctx(), id);
     }
-    let painter = ui.painter();
+    // Auto-scroll when drag-selecting text towards or outside the viewport edges.
+    let is_dragging = (ui.is_being_dragged(id) || out.response.response.dragged()) && ui.input(|i| i.pointer.primary_down());
+    if is_dragging && let Some(ptr) = ui.input(|i| i.pointer.latest_pos()) {
+        let edge_margin = 6.0;
+        let speed = |dist: f32| (dist * 0.6).clamp(3.0, 35.0);
+        let mut scroll_delta = egui::Vec2::ZERO;
+
+        if ptr.y > er.max.y - edge_margin {
+            scroll_delta.y += speed(ptr.y - (er.max.y - edge_margin));
+        } else if ptr.y < er.min.y + edge_margin {
+            scroll_delta.y -= speed((er.min.y + edge_margin) - ptr.y);
+        }
+
+        if ptr.x > er.max.x - edge_margin {
+            scroll_delta.x += speed(ptr.x - (er.max.x - edge_margin));
+        } else if ptr.x < er.min.x + edge_margin {
+            scroll_delta.x -= speed((er.min.x + edge_margin) - ptr.x);
+        }
+
+        if scroll_delta != egui::Vec2::ZERO {
+            let max_scroll_x = (scroll_out.content_size.x - er.width()).max(0.0);
+            let max_scroll_y = (scroll_out.content_size.y - er.height()).max(0.0);
+            let mut scroll_state = scroll_out.state;
+            let old_offset = scroll_state.offset;
+            scroll_state.offset.x = (scroll_state.offset.x + scroll_delta.x).clamp(0.0, max_scroll_x);
+            scroll_state.offset.y = (scroll_state.offset.y + scroll_delta.y).clamp(0.0, max_scroll_y);
+            if scroll_state.offset != old_offset {
+                scroll_state.store(ui.ctx(), scroll_out.id);
+                ui.ctx().request_repaint();
+            }
+
+            // Expand text selection to the dragged pointer position.
+            let pos_in_galley = ptr - out.galley_pos;
+            let target_cursor = out.galley.cursor_from_pos(pos_in_galley);
+            let mut st = out.state.clone();
+            if let Some(mut range) = st.cursor.char_range() {
+                range.primary = target_cursor;
+                st.cursor.set_char_range(Some(range));
+                st.store(ui.ctx(), id);
+            }
+        }
+    }
+    let painter = ui.painter().with_clip_rect(rect);
     if p.line_numbers {
+        painter.rect_filled(Rect::from_min_max(rect.min, pos2(rect.min.x + gutter - 3.0, rect.max.y)), 0.0, t.expr_bg);
         let g = out.galley.clone();
         let mut line = 1;
         let mut new_line = true;
         for row in &g.rows {
             if new_line {
                 let y = out.galley_pos.y + row.rect().center().y;
-                painter.text(pos2(rect.min.x + gutter - 6.0, y), egui::Align2::RIGHT_CENTER, line.to_string(), Tokens::mono(size * 0.85), t.text_faint);
+                if y >= rect.min.y - 2.0 && y <= rect.max.y + 2.0 {
+                    painter.text(pos2(rect.min.x + gutter - 6.0, y), egui::Align2::RIGHT_CENTER, line.to_string(), Tokens::mono(size * 0.85), t.text_faint);
+                }
                 line += 1;
             }
             new_line = row.ends_with_newline;
