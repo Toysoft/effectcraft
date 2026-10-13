@@ -7,7 +7,7 @@
 //! parameters that differ from their `pard` default have a value record in the `tdgp`.
 
 use crate::Chunk;
-use crate::bytes::{array, be_f64, be_i32, be_u32, cstr, text, until_nul};
+use crate::bytes::{array, be_f64, be_i32, be_u16, be_u32, cstr, text, until_nul};
 use crate::typed::{Layer, PropGroup, PropNode, Property};
 
 /// The parameter type, the `u32` at byte 12 of `pard`. The numbering matches the plug-in
@@ -73,8 +73,21 @@ pub enum ParamValue {
     /// A colour as ARGB fractions 0..1 (stored as doubles 0..255 in the order alpha, red, green,
     /// blue: a colour `[0.2, 0.6, 1]` is `[255, 51, 153, 255]`, with float rounding).
     Argb([f64; 4]),
-    /// A popup's default item index (1-based in the samples).
+    /// A popup's item index (1-based in the samples): the default in `pard`, or the stored
+    /// selection.
     Index(u32),
+}
+
+/// What a Layer Control points at, given the id of the layer that owns the effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerRef {
+    /// The layer itself (the default, "Layer 1" on the first layer): the stored `tdpi` equals the
+    /// owning layer's id.
+    This,
+    /// None: the stored `tdpi` is 0.
+    Nothing,
+    /// Another layer, by id.
+    Layer(u32),
 }
 
 /// An effect instance on a layer.
@@ -191,6 +204,10 @@ impl<'f, 'a> EffectParam<'f, 'a> {
                 let [x, y] = *v.as_slice().first_chunk::<2>()?;
                 Some(ParamValue::Point([x, y]))
             }
+            ParamKind::Popup => {
+                let index = v.first().copied()?;
+                (0.0..=f64::from(u32::MAX)).contains(&index).then(|| ParamValue::Index(index.round() as u32))
+            }
             ParamKind::Color => {
                 let [a, r, g, b] = *v.as_slice().first_chunk::<4>()?;
                 Some(ParamValue::Argb([a / 255.0, r / 255.0, g / 255.0, b / 255.0]))
@@ -200,23 +217,87 @@ impl<'f, 'a> EffectParam<'f, 'a> {
     }
 
     /// The default stored in `pard` at byte 56: a float slider's `f64`, a fixed slider's or angle's
-    /// 16.16 value, a colour's ARGB bytes, a popup's item index. Other types: `None` (the point
-    /// default is not verified; a checkbox is off, see [`EffectParam::value`]).
+    /// 16.16 value, a colour's ARGB bytes, a popup's item index, a point's two 16.16 fractions of
+    /// the layer size (0.5, 0.5: the layer centre, also on a 100x100 layer). A checkbox is off, see
+    /// [`EffectParam::value`]; other types: `None`.
     ///
     /// It is the default and not the current value: Gaussian Blur with Blurriness 40 still has 25
-    /// here and a value record with 40. (The corpus manifest calls the default Blurriness 0, the
-    /// files only ever contain 25.)
+    /// here and a value record with 40 (After Effects itself reads a fresh Gaussian Blur back as 25).
+    /// Exception: selecting a popup item also writes the selection to this slot.
     pub fn pard_default(&self) -> Option<ParamValue> {
         match self.kind {
             ParamKind::FloatSlider => be_f64(self.pard, 56).map(ParamValue::Number),
             ParamKind::FixedSlider | ParamKind::Angle => be_i32(self.pard, 56).map(|v| ParamValue::Number(f64::from(v) / 65536.0)),
             ParamKind::Popup => be_u32(self.pard, 56).map(ParamValue::Index),
+            ParamKind::Point => Some(ParamValue::Point([f64::from(be_i32(self.pard, 56)?) / 65536.0, f64::from(be_i32(self.pard, 60)?) / 65536.0])),
             ParamKind::Color => {
                 let [a, r, g, b] = array::<4>(self.pard, 56)?.map(|c| f64::from(c) / 255.0);
                 Some(ParamValue::Argb([a, r, g, b]))
             }
             _ => None,
         }
+    }
+
+    /// True when the parameter is at its default: it has no value record (a record exists exactly
+    /// when the value differs from the `pard` default; setting a value back to the default removes
+    /// the record again), or the record equals the default. `None` when that cannot be decided
+    /// (unknown parameter type).
+    pub fn is_default(&self) -> Option<bool> {
+        match (self.stored, self.kind) {
+            // A Layer Control always has its record, and a popup selection overwrites the default in `pard`.
+            (_, ParamKind::Layer) => None,
+            (None, _) => Some(true),
+            (Some(_), ParamKind::Popup) => Some(false),
+            (Some(_), _) => {
+                let stored = self.stored_value()?;
+                Some(self.pard_default().is_some_and(|d| d == stored) || (self.kind == ParamKind::Checkbox && stored == ParamValue::Bool(false)))
+            }
+        }
+    }
+
+    /// A point control in pixels of a layer of this size (the stored point is a fraction of the
+    /// layer size; the default is the layer centre). `None` for other parameter types.
+    pub fn point_px(&self, layer_width: f64, layer_height: f64) -> Option<[f64; 2]> {
+        match self.value()? {
+            ParamValue::Point([x, y]) if self.kind == ParamKind::Point => Some([x * layer_width, y * layer_height]),
+            _ => None,
+        }
+    }
+
+    /// For a Layer Control: what the stored layer id means for the layer that owns the effect.
+    /// `None` for other types and for the implicit first parameter of an effect.
+    pub fn layer_ref(&self, owner_layer_id: u32) -> Option<LayerRef> {
+        if self.kind != ParamKind::Layer || self.index == 0 {
+            return None;
+        }
+        match self.stored_value()? {
+            ParamValue::Layer(0) => Some(LayerRef::Nothing),
+            ParamValue::Layer(id) if id == owner_layer_id => Some(LayerRef::This),
+            ParamValue::Layer(id) => Some(LayerRef::Layer(id)),
+            _ => None,
+        }
+    }
+
+    /// For a popup: the number of items (`u16` at byte 60 of `pard`).
+    pub fn popup_item_count(&self) -> Option<u16> {
+        if self.kind != ParamKind::Popup {
+            return None;
+        }
+        be_u16(self.pard, 60)
+    }
+
+    /// For a popup: the selected item index (1-based): the stored selection, else the default.
+    pub fn popup_selected_index(&self) -> Option<u32> {
+        match self.value()? {
+            ParamValue::Index(i) if self.kind == ParamKind::Popup => Some(i),
+            _ => None,
+        }
+    }
+
+    /// For a popup: the text of the selected item.
+    pub fn popup_selected_item(&self) -> Option<&str> {
+        let index = usize::try_from(self.popup_selected_index()?).ok()?.checked_sub(1)?;
+        self.items.as_ref()?.get(index).map(String::as_str)
     }
 
     /// The effective value: the stored value when there is one, else the `pard` default (absent =

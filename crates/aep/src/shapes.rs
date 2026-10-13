@@ -71,6 +71,52 @@ pub enum ShapeItem {
     Other { match_name: String, name: Option<String> },
 }
 
+/// The polystar type (`ADBE Vector Star Type`; star is the default and is not stored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolystarType {
+    /// `1`
+    Star,
+    /// `2`
+    Polygon,
+    /// Any other value.
+    Other(i64),
+}
+
+/// The gradient type (`ADBE Vector Grad Type`; linear is the default and is not stored).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientType {
+    /// `1`
+    Linear,
+    /// `2`
+    Radial,
+    /// Any other value.
+    Other(i64),
+}
+
+/// Fields of shape items that [`ShapeItem`] does not carry, in the order of the group's items.
+/// `item_index` is the index into [`ShapeGroup::items`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShapeDetail {
+    /// `ADBE Vector Shape - Star` (listed as [`ShapeItem::Other`]). The defaults After Effects
+    /// applies when a property is absent are star, outer radius 100, inner radius 50, so a default
+    /// star has no property at all (330); a polygon stores the type and writes the inner radius and
+    /// the inner roundness (`ADBE Vector Star Inner Roundess`, After Effects' own spelling) in their
+    /// default state (331).
+    Polystar {
+        item_index: usize,
+        star_type: Tracked<PolystarType>,
+        outer_radius: Tracked<f64>,
+        inner_radius: Tracked<f64>,
+        /// `None` unless the roundness is stored.
+        inner_roundness: Option<Tracked<f64>>,
+    },
+    /// `ADBE Vector Graphic - G-Fill`: the gradient type and, for a radial gradient, the highlight
+    /// length and angle (written as stored records with value 0 when the type is radial, 332).
+    Gradient { item_index: usize, gradient_type: Tracked<GradientType>, highlight_length: Option<Tracked<f64>>, highlight_angle: Option<Tracked<f64>> },
+    /// The `ADBE Vector Rect Position` of a rectangle path (absent = `[0, 0]`), in pixels (333).
+    RectPosition { item_index: usize, position: Tracked<[f64; 2]> },
+}
+
 /// A shape group (`ADBE Vector Group`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeGroup {
@@ -78,8 +124,11 @@ pub struct ShapeGroup {
     pub name: Option<String>,
     /// The group transform's Position in pixels; absent = `[0, 0]`.
     pub position: Tracked<[f64; 2]>,
-    /// The contents in z-order (top first, as in the file).
+    /// The contents in z-order (top first, as in the file). Two siblings with the same match name
+    /// (two rectangles) are two items.
     pub items: Vec<ShapeItem>,
+    /// More fields of the items (polystar, gradient type, rectangle position), see [`ShapeDetail`].
+    pub details: Vec<ShapeDetail>,
 }
 
 const COLOR_SCALE: f64 = 1.0 / 255.0;
@@ -136,23 +185,65 @@ fn item(match_name: String, group: &PropGroup<'_, '_>) -> ShapeItem {
     }
 }
 
-fn group_of(group: &PropGroup<'_, '_>) -> ShapeGroup {
-    let items = match group.get("ADBE Vectors Group") {
-        Some(PropNode::Group(contents)) => contents
-            .entries()
-            .into_iter()
-            .filter_map(|e| match e.node {
-                PropNode::Group(g) => Some(item(e.match_name, &g)),
-                PropNode::Property(_) | PropNode::Other(_) => None,
-            })
-            .collect(),
-        _ => Vec::new(),
+fn detail(match_name: &str, group: &PropGroup<'_, '_>, item_index: usize) -> Option<ShapeDetail> {
+    let tracked = |name: &str, default: f64| {
+        let t = read(group, name, [default], 1.0);
+        Tracked { value: t.value[0], source: t.source }
     };
+    match match_name {
+        "ADBE Vector Shape - Star" => {
+            let star_type = tracked("ADBE Vector Star Type", 1.0);
+            Some(ShapeDetail::Polystar {
+                item_index,
+                star_type: Tracked {
+                    value: match star_type.value.round() as i64 {
+                        1 => PolystarType::Star,
+                        2 => PolystarType::Polygon,
+                        other => PolystarType::Other(other),
+                    },
+                    source: star_type.source,
+                },
+                outer_radius: tracked("ADBE Vector Star Outer Radius", 100.0),
+                inner_radius: tracked("ADBE Vector Star Inner Radius", 50.0),
+                inner_roundness: number(group, "ADBE Vector Star Inner Roundess"),
+            })
+        }
+        "ADBE Vector Graphic - G-Fill" => {
+            let gradient_type = tracked("ADBE Vector Grad Type", 1.0);
+            Some(ShapeDetail::Gradient {
+                item_index,
+                gradient_type: Tracked {
+                    value: match gradient_type.value.round() as i64 {
+                        1 => GradientType::Linear,
+                        2 => GradientType::Radial,
+                        other => GradientType::Other(other),
+                    },
+                    source: gradient_type.source,
+                },
+                highlight_length: number(group, "ADBE Vector Grad HiLite Length"),
+                highlight_angle: number(group, "ADBE Vector Grad HiLite Angle"),
+            })
+        }
+        "ADBE Vector Shape - Rect" => Some(ShapeDetail::RectPosition { item_index, position: read(group, "ADBE Vector Rect Position", [0.0, 0.0], 1.0) }),
+        _ => None,
+    }
+}
+
+fn group_of(group: &PropGroup<'_, '_>) -> ShapeGroup {
+    let (mut items, mut details) = (Vec::new(), Vec::new());
+    if let Some(PropNode::Group(contents)) = group.get("ADBE Vectors Group") {
+        for e in contents.entries() {
+            if let PropNode::Group(g) = e.node {
+                details.extend(detail(&e.match_name, &g, items.len()));
+                items.push(item(e.match_name, &g));
+            }
+        }
+    }
     let position = match group.get("ADBE Vector Transform Group") {
         Some(PropNode::Group(t)) => read(&t, "ADBE Vector Position", [0.0, 0.0], 1.0),
         _ => Tracked { value: [0.0, 0.0], source: crate::values::ValueSource::Default },
     };
-    ShapeGroup { name: group.user_name(), position, items }
+    ShapeGroup { name: group.user_name(), position, items, details }
 }
 
 impl<'f, 'a> Layer<'f, 'a> {

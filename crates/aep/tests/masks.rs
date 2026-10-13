@@ -158,7 +158,7 @@ fn mask_mode_ids() {
         assert_eq!(m[0].shapes.len(), 1);
         assert!(!m[0].shapes[0].open);
     }
-    assert_eq!(MaskMode::from_id(0), MaskMode::Other(0));
+    assert_eq!(MaskMode::from_id(0), MaskMode::None);
     assert_eq!(MaskMode::from_id(9), MaskMode::Other(9));
 }
 

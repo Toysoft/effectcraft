@@ -114,3 +114,42 @@ impl<'f, 'a> Layer<'f, 'a> {
         })
     }
 }
+
+/// One key of a layer's Time Remapping property: the layer time of the key and the source time it
+/// maps to, both in seconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimeRemapKey {
+    /// The key time in the property's time units.
+    pub time_units: i32,
+    /// The key time in seconds (layer time).
+    pub time_seconds: Option<f64>,
+    /// The value in seconds (the plain record's value at byte 8).
+    pub value_seconds: f64,
+}
+
+/// The state of a layer's `ADBE Time Remapping` property. Every layer has the property; while the
+/// remap is off it is an inert record (`tdsb` 3, static value 0, no keys). Enabling the remap turns
+/// it into a keyed property (`tdsb` 1, `tdb4` byte 68 = 1, no `cdat`) with two keys: the layer's in
+/// and out time mapped to the source time (319: 0 s and 5 s; 354: 0 s and 0.1 s).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeRemap {
+    /// True when the property has keys.
+    pub enabled: bool,
+    pub keys: Vec<TimeRemapKey>,
+}
+
+impl<'f, 'a> Layer<'f, 'a> {
+    /// The Time Remapping state; `None` when the layer has no such property.
+    pub fn time_remap(&self) -> Option<TimeRemap> {
+        let Some(PropNode::Property(p)) = self.properties()?.get("ADBE Time Remapping") else { return None };
+        let scale = p.time_scale().unwrap_or(0);
+        let keys = match p.keys() {
+            Some(list) => list
+                .keyframes()
+                .filter_map(|k| Some(TimeRemapKey { time_units: k.time_units()?, time_seconds: k.seconds(scale), value_seconds: k.scalar_value()? }))
+                .collect(),
+            None => Vec::new(),
+        };
+        Some(TimeRemap { enabled: p.is_animated(), keys })
+    }
+}
