@@ -225,3 +225,48 @@ fn import_dialog_offers_mxf() {
     assert!(offered.iter().any(|e| e == "mxf"), "offered {offered:?}");
     assert!(offered.iter().any(|e| e == "mov"));
 }
+
+/// Move the pointer to `p` (no button), then let the UI settle.
+fn hover(h: &mut Harness<'_, EffectcraftApp>, p: Pos2) {
+    h.input_mut().events.push(Event::PointerMoved(p));
+    h.run_steps(3);
+}
+
+/// #1290: with a menu open, moving the pointer onto another title opens that menu instead (no
+/// second click), both ways; with the menus closed, hovering the bar opens nothing.
+#[test]
+fn hovering_another_title_switches_the_open_menu() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    hover(&mut h, file.center());
+    hover(&mut h, edit.center());
+    assert!(!shown(&h, "Open Project") && !shown(&h, "Keyboard Shortcuts"), "hovering the closed bar opens nothing");
+    click_at(&mut h, file.center());
+    assert!(shown(&h, "Open Project"), "the click opened File");
+    hover(&mut h, edit.center());
+    assert!(shown(&h, "Keyboard Shortcuts"), "hovering Edit opened it");
+    assert!(!shown(&h, "Open Project"), "and closed File");
+    hover(&mut h, file.center());
+    assert!(shown(&h, "Open Project") && !shown(&h, "Keyboard Shortcuts"), "and back to File");
+    key(&mut h, Key::Space);
+    assert!(!h.state().playback.playing, "Space didn't start the preview behind the menu");
+    key(&mut h, Key::Escape);
+    assert!(!shown(&h, "Open Project"), "Escape closed the menu");
+    hover(&mut h, edit.center());
+    assert!(!shown(&h, "Keyboard Shortcuts"), "closed again, hovering opens nothing");
+}
+
+/// From an open submenu, the pointer reaching another title switches menus too.
+#[test]
+fn hovering_a_title_from_an_open_submenu_switches_menus() {
+    let mut h = harness();
+    let (file, edit) = (rect(&h, "menu.File"), rect(&h, "menu.Edit"));
+    click_at(&mut h, file.center());
+    let new = h.query_by(|n| n.label().is_some_and(|l| l.trim_end_matches('\u{23f5}').trim() == "New")).expect("File ▸ New").rect();
+    hover(&mut h, new.center());
+    h.run_steps(5);
+    assert!(shown(&h, "New Project from Template"), "the New submenu is open");
+    hover(&mut h, edit.center());
+    assert!(shown(&h, "Keyboard Shortcuts"), "hovering Edit opened it");
+    assert!(!shown(&h, "New Project from Template") && !shown(&h, "Open Project"), "and closed File and its submenu");
+}
