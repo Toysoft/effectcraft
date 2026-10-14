@@ -37,6 +37,7 @@ pub const NOT_IN_ATOMIC: &[&str] = &[
     "render.preRender",
     "renderQueue.render",
     "essential.exportTemplate",
+    "essential.importTemplate",
     "shortcuts.export",
     "templates.saveAs",
     "templates.delete",
@@ -282,6 +283,11 @@ mod tests {
         assert!(e.contains("step 2 (`file.saveAs`)") && e.contains("nothing ran"), "{e}");
         assert_eq!(layers(&s), 0, "step 1 didn't run");
         assert!(!std::path::Path::new(&path).exists());
+        let e = s
+            .execute_checked("engine.batch", json!({"steps": [{"command": "essential.importTemplate", "params": {"path": "absent.ectemplate"}}]}))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("nothing ran"), "template extraction cannot be rolled back: {e}");
         // Without atomicity it runs, as before.
         s.execute_checked("engine.batch", json!({"steps": steps, "atomic": false})).unwrap();
         assert_eq!(layers(&s), 1);

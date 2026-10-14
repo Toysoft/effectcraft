@@ -795,7 +795,7 @@ pub fn offset_ids(p: &mut Project, offset: u64) -> Result<(), OffsetError> {
     }
     p.render_queue.clear();
     p.next_id = sh.id(p.next_id);
-    if sh.overflow { Err(OffsetError::OutOfRange) } else { Ok(()) }
+    if sh.overflow || p.next_id > crate::limits::MAX_NEXT_ID { Err(OffsetError::OutOfRange) } else { Ok(()) }
 }
 
 fn offset_layer(l: &mut Layer, sh: &mut Shift) {

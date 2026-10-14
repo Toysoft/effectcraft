@@ -297,3 +297,9 @@ fn offset_ids_refuses_ids_that_would_collapse_instead_of_merging_them() {
     assert_eq!(after, before.iter().map(|i| i + 1000).collect::<Vec<_>>());
     assert_eq!(p.next_id, next + 1000);
 }
+
+#[test]
+fn offset_ids_preserves_the_allocation_headroom_required_when_loading() {
+    let mut p = Project { next_id: crate::limits::MAX_NEXT_ID, ..Default::default() };
+    assert_eq!(crate::essential::offset_ids(&mut p, 1), Err(crate::essential::OffsetError::OutOfRange));
+}
