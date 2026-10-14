@@ -744,7 +744,21 @@ fn append_line(path: &Path, v: &Value) -> Result<(), String> {
 
 fn read_jsonl(path: &Path) -> Result<Vec<Value>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(text.lines().filter(|l| !l.trim().is_empty()).filter_map(|l| serde_json::from_str(l).ok()).collect())
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        // A malformed line is corrupt evidence: report it with its line number instead of
+        // dropping it, so a comparison (or the --fail-over gate) can never run on silently
+        // missing measurements (#1303).
+        let v: Value = serde_json::from_str(line).map_err(|e| format!("{}:{}: {e}", path.display(), i + 1))?;
+        if !v.is_object() {
+            return Err(format!("{}:{}: not a benchmark result object", path.display(), i + 1));
+        }
+        out.push(v);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------------------- output
@@ -1005,6 +1019,20 @@ mod tests {
         assert!(regressions(&base, &slower, 1.0).is_empty());
         assert!(parse_opts(&["--fail-over".into(), "5".into()]).is_err(), "needs --compare");
         assert!(parse_opts(&["--compare".into(), "a".into(), "--fail-over".into(), "x".into()]).is_err());
+    }
+
+    #[test]
+    fn malformed_results_are_an_error_naming_the_line() {
+        let d = std::env::temp_dir().join(format!("ec-bench-jsonl-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = d.join("results.jsonl");
+        let line = r#"{"scenario":"demo","run":"full","ok":true,"settings":{"resolution":"full","frames":60,"format":"png"},"metrics":{}}"#;
+        std::fs::write(&p, format!("{line}\n{{\"truncated\":\n\n{line}\n")).unwrap();
+        let e = read_jsonl(&p).expect_err("a malformed nonempty line is not silently dropped");
+        assert!(e.contains("results.jsonl") && e.contains(":2"), "the error names the file and line: {e}");
+        std::fs::write(&p, format!("{line}\n\n")).unwrap();
+        assert_eq!(read_jsonl(&p).unwrap().len(), 1, "blank lines are allowed");
+        let _ = std::fs::remove_dir_all(d);
     }
 
     #[test]
