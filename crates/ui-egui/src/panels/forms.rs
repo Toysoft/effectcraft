@@ -5,7 +5,7 @@
 //! dialog does an agent can do with one `engine.execute`.
 
 use crate::i18n::{tr, tr_args};
-use egui::{Color32, vec2};
+use egui::vec2;
 use serde_json::{Map, Value, json};
 
 use crate::theme::Tokens;

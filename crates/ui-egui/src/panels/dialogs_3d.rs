@@ -5,7 +5,7 @@
 use crate::i18n::tr;
 use effectcraft_engine::project::{AutoOrient, LayerSource, LightKind};
 use effectcraft_engine::render::three_d::camera::{PRESETS, angle_of_view, default_aperture, focal_for_zoom, zoom_for_focal};
-use egui::{Color32, vec2};
+use egui::vec2;
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;

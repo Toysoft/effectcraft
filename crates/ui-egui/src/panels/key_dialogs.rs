@@ -2,7 +2,7 @@
 //! pre-filled from the engine (`keys.info`, the layer) and commits through one engine command.
 
 use crate::i18n::tr;
-use egui::{Color32, vec2};
+use egui::vec2;
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;
