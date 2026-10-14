@@ -126,7 +126,7 @@ impl Tokens {
 
     /// Foreground for a filled accent control in the standard dark palette.
     pub fn on_accent(&self) -> Color32 {
-        if self.kind == ThemeKind::Dark { craft_ui::theme::SuiteDarkPalette::ARTCRAFT.on_accent } else { Color32::WHITE }
+        if self.kind == ThemeKind::Dark { craft_ui::theme::SuitePalette::ARTCRAFT_DARK.on_accent } else { Color32::WHITE }
     }
 
     /// The gradient top colour for a fill (a little lighter), or the fill itself when gradients
@@ -192,7 +192,7 @@ impl Tokens {
             row_h: 19.0,
             gradients: true,
         };
-        let roles = craft_ui::theme::SuiteDarkPalette::ARTCRAFT;
+        let roles = craft_ui::theme::SuitePalette::ARTCRAFT_DARK;
         match kind {
             ThemeKind::Dark => Tokens {
                 // Shared standard-dark UI roles; editing/timeline semantics stay local.
@@ -696,7 +696,7 @@ mod tests {
 
     #[test]
     fn dark_adapter_reads_shared_roles_without_overriding_brightness_or_semantics() {
-        let roles = craft_ui::theme::SuiteDarkPalette::ARTCRAFT;
+        let roles = craft_ui::theme::SuitePalette::ARTCRAFT_DARK;
         let dark = Tokens::for_kind(ThemeKind::Dark);
         assert_eq!(dark.app_bg, roles.window);
         assert_eq!(dark.header_bg, roles.chrome);
