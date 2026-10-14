@@ -1,8 +1,7 @@
 //! Design tokens. Every widget reads colours/sizes from [`Tokens`] so themes apply everywhere.
 //!
-//! The default theme follows the look of After Effects' dark UI (values estimated from public
-//! documentation and product knowledge, tuned by eye; see `plan/aftereffects/README.md` §2). Fonts
-//! are Inter + JetBrains Mono (OFL).
+//! The standard dark interface adapts the shared ArtCraft role palette. Alternate themes and
+//! timeline/editing semantics stay local. Fonts are Inter + JetBrains Mono (OFL).
 
 use std::sync::Arc;
 
@@ -122,7 +121,7 @@ pub fn gradient_rect(painter: &egui::Painter, rect: egui::Rect, top: Color32, bo
 impl Tokens {
     /// Foreground for a filled accent control in the standard dark palette.
     pub fn on_accent(&self) -> Color32 {
-        if self.kind == ThemeKind::Dark { Color32::from_rgb(0x06, 0x06, 0x07) } else { Color32::WHITE }
+        if self.kind == ThemeKind::Dark { craft_ui::theme::SuiteDarkPalette::ARTCRAFT.on_accent } else { Color32::WHITE }
     }
 
     /// The gradient top colour for a fill (a little lighter), or the fill itself when gradients
@@ -188,33 +187,34 @@ impl Tokens {
             row_h: 19.0,
             gradients: true,
         };
+        let roles = craft_ui::theme::SuiteDarkPalette::ARTCRAFT;
         match kind {
             ThemeKind::Dark => Tokens {
-                // ArtCraft standard dark roles; editing/timeline semantics stay local.
-                app_bg: Color32::from_rgb(0x12, 0x13, 0x16),
-                header_bg: Color32::from_rgb(0x0a, 0x0a, 0x0c),
-                panel_bg: Color32::from_rgb(0x10, 0x10, 0x14),
-                tab_text: Color32::from_rgb(0xa6, 0xa6, 0xa8),
-                tab_text_active: Color32::WHITE,
-                focus: Color32::from_rgb(0x74, 0xaa, 0xff),
-                accent: Color32::from_rgb(0x2d, 0x81, 0xff),
-                accent_hover: Color32::from_rgb(0x59, 0xa7, 0xff),
-                text: Color32::from_rgb(0xf2, 0xf1, 0xee),
-                text_dim: Color32::from_rgb(0xa6, 0xa6, 0xa8),
-                text_faint: Color32::from_rgb(0x71, 0x71, 0x76),
-                icon: Color32::from_rgb(0xa6, 0xa6, 0xa8),
-                icon_active: Color32::WHITE,
-                hover: Color32::from_rgb(0x32, 0x33, 0x37),
-                pressed: Color32::from_rgb(0x41, 0x42, 0x46),
-                field_bg: Color32::from_rgb(0x06, 0x06, 0x07),
-                field_border: Color32::from_rgb(0x36, 0x37, 0x3a),
-                separator: Color32::from_rgb(0x36, 0x37, 0x3a),
-                row: Color32::from_rgb(0x10, 0x10, 0x14),
-                row_alt: Color32::from_rgb(0x1e, 0x1f, 0x22),
-                row_selected: Color32::from_rgb(0x20, 0x3b, 0x65),
-                hot_text: Color32::from_rgb(0x59, 0xa7, 0xff),
-                fx_header: Color32::from_rgb(0x1e, 0x1f, 0x22),
-                fx_header_active: Color32::from_rgb(0x20, 0x3b, 0x65),
+                // Shared standard-dark UI roles; editing/timeline semantics stay local.
+                app_bg: roles.window,
+                header_bg: roles.chrome,
+                panel_bg: roles.panel,
+                tab_text: roles.text_secondary,
+                tab_text_active: roles.text_strong,
+                focus: roles.focus,
+                accent: roles.accent,
+                accent_hover: roles.accent_hover,
+                text: roles.text,
+                text_dim: roles.text_secondary,
+                text_faint: roles.text_disabled,
+                icon: roles.text_secondary,
+                icon_active: roles.text_strong,
+                hover: roles.hover,
+                pressed: roles.pressed,
+                field_bg: roles.input,
+                field_border: roles.border,
+                separator: roles.border,
+                row: roles.panel,
+                row_alt: roles.raised,
+                row_selected: roles.selection,
+                hot_text: roles.accent_hover,
+                fx_header: roles.raised,
+                fx_header_active: roles.selection,
                 ..dark
             },
             ThemeKind::Darker => Tokens {
@@ -688,6 +688,64 @@ mod script_font_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dark_adapter_reads_shared_roles_without_overriding_brightness_or_semantics() {
+        let roles = craft_ui::theme::SuiteDarkPalette::ARTCRAFT;
+        let dark = Tokens::for_kind(ThemeKind::Dark);
+        assert_eq!(dark.app_bg, roles.window);
+        assert_eq!(dark.header_bg, roles.chrome);
+        assert_eq!(dark.panel_bg, roles.panel);
+        assert_eq!(dark.tab_text, roles.text_secondary);
+        assert_eq!(dark.tab_text_active, roles.text_strong);
+        assert_eq!(dark.focus, roles.focus);
+        assert_eq!(dark.accent, roles.accent);
+        assert_eq!(dark.accent_hover, roles.accent_hover);
+        assert_eq!(dark.text, roles.text);
+        assert_eq!(dark.text_dim, roles.text_secondary);
+        assert_eq!(dark.text_faint, roles.text_disabled);
+        assert_eq!(dark.icon, roles.text_secondary);
+        assert_eq!(dark.icon_active, roles.text_strong);
+        assert_eq!(dark.hover, roles.hover);
+        assert_eq!(dark.pressed, roles.pressed);
+        assert_eq!(dark.field_bg, roles.input);
+        assert_eq!(dark.field_border, roles.border);
+        assert_eq!(dark.separator, roles.border);
+        assert_eq!(dark.row, roles.panel);
+        assert_eq!(dark.row_alt, roles.raised);
+        assert_eq!(dark.row_selected, roles.selection);
+        assert_eq!(dark.hot_text, roles.accent_hover);
+        assert_eq!(dark.fx_header, roles.raised);
+        assert_eq!(dark.fx_header_active, roles.selection);
+        assert_eq!(dark.on_accent(), roles.on_accent);
+        let darker = Tokens::for_kind(ThemeKind::Darker);
+        for (actual, expected) in [
+            (dark.cti, darker.cti),
+            (dark.cache_green, darker.cache_green),
+            (dark.cache_blue, darker.cache_blue),
+            (dark.keyframe, darker.keyframe),
+            (dark.keyframe_selected, darker.keyframe_selected),
+            (dark.timecode, darker.timecode),
+            (dark.danger, darker.danger),
+            (dark.warning, darker.warning),
+            (dark.expr_text, darker.expr_text),
+        ] {
+            assert_eq!(actual, expected);
+        }
+        assert_eq!(dark.labels, darker.labels);
+        assert_eq!(dark.pasteboard, Color32::from_rgb(0x1a, 0x1a, 0x1a));
+        let brighter = dark.with_brightness(0.5);
+        assert_ne!(brighter.panel_bg, dark.panel_bg);
+        assert_eq!(brighter.accent, dark.accent);
+        assert_eq!(brighter.labels, dark.labels);
+        assert_eq!(brighter.keyframe_selected, dark.keyframe_selected);
+        assert_eq!(dark.with_brightness(0.0), dark);
+        let light = Tokens::for_kind(ThemeKind::Light);
+        assert_eq!(light.field_bg, Color32::from_rgb(0xfa, 0xfa, 0xfa));
+        assert_eq!(light.accent, Color32::from_rgb(0x2d, 0x8c, 0xeb));
+        assert_eq!(darker.field_bg, Color32::from_rgb(0x0e, 0x0e, 0x0e));
+        assert_eq!(darker.text, Color32::from_rgb(0xc8, 0xc8, 0xc8));
+    }
 
     #[test]
     fn standard_dark_roles_preserve_alternatives_and_timeline_semantics() {
