@@ -273,7 +273,7 @@ fn checksum(data: &[u8]) -> u64 {
 /// The platform's default disk cache folder.
 pub fn default_folder() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    if cfg!(target_os = "macos")
+    if cfg!(any(target_os = "macos", target_os = "ios"))
         && let Some(h) = &home
     {
         return h.join("Library/Caches/EffectCraft/Disk Cache");

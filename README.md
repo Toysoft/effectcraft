@@ -10,6 +10,13 @@
 
 <h1 align="center">EffectCraft</h1>
 
+> **Initial iOS port:** this development fork adds a native iPhone/iPad target using the shared
+> Rust editor with UIKit and Metal. It defaults to landscape at 60% UI scale, uses native Files
+> pickers, and supports Command/Option keyboard shortcuts. See the
+> [iOS build instructions, validation and current limitations](packaging/ios/README.md).
+> Requires iOS 18 or newer; this is an upstream contribution proposal, not an official iOS release.
+
+
 <p align="center">
   <b>Motion graphics and visual effects; an open-source, clean-room reimplementation of Adobe After Effects, rebuilt in pure Rust.</b>
 </p>

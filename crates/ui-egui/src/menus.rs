@@ -291,6 +291,9 @@ fn only_comp(p: &Value) -> Option<effectcraft_engine::project::ItemId> {
 
 /// Execute a UI or engine command by id.
 pub fn invoke(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if cfg!(target_os = "ios") && id == "file.watchFolder" && params.get("stop").is_none() {
+        return Err("Live watching external Files folders is not supported on iOS yet. Import files through Files instead.".into());
+    }
     if id == "effects.copyPresetsFolderPath" {
         return frontend(app, ctx, id, params);
     }
@@ -1326,22 +1329,29 @@ pub fn frontend(app: &mut EffectcraftApp, ctx: &egui::Context, id: &str, p: Valu
 
 /// Commands that need a file or folder path: ask the host's file dialog when `params` lacks one.
 fn file_dialog(app: &mut EffectcraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
-    enum Ask {
+    enum Ask<'a> {
         Folder,
         Import,
         OpenProject,
-        Save(&'static str),
+        Save(&'a str),
         Open(&'static [&'static str]),
     }
+    let project_default = app
+        .session
+        .path
+        .as_ref()
+        .and_then(|path| std::path::Path::new(path).file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Untitled Project.ecproj".into());
     let (key, ask) = match id {
         "file.import" | "file.importMultiple" => ("paths", Ask::Import),
         "file.open" => ("path", Ask::OpenProject),
-        "file.save" if app.session.path.is_none() => ("path", Ask::Save("Untitled Project.ecproj")),
-        "file.saveAs" | "file.saveCopy" => ("path", Ask::Save("Untitled Project.ecproj")),
+        "file.save" if app.session.path.is_none() || cfg!(target_os = "ios") => ("path", Ask::Save(&project_default)),
+        "file.saveAs" | "file.saveCopy" => ("path", Ask::Save(&project_default)),
         "comp.saveFrameAs" => ("path", Ask::Save("Frame.png")),
         "comp.saveFrameAsPsd" => ("path", Ask::Save("Frame.psd")),
         "comp.saveFrameAsExr" => ("path", Ask::Save("Frame.exr")),
-        "file.watchFolder" if params.get("stop").is_none() => ("folder", Ask::Save("Watch Folder")),
+        "file.watchFolder" if params.get("stop").is_none() => ("folder", Ask::Folder),
         "anim.savePreset" => ("path", Ask::Save("Preset.ecpreset")),
         "anim.applyPreset" => ("path", Ask::Open(&["ecpreset", "json"])),
         "view.exportGuides" => ("path", Ask::Save("Guides.json")),
@@ -1459,7 +1469,18 @@ fn run_with_picked(app: &mut EffectcraftApp, id: &str, key: &str, params: &Value
     }
     // Save (untitled) becomes Save As.
     let id = if id == "file.save" { "file.saveAs" } else { id };
+    let selected_path = p
+        .get("path")
+        .or_else(|| p.get("folder"))
+        .and_then(Value::as_str)
+        .filter(|_| !matches!(id, "file.open" | "file.runScript" | "renderQueue.setOutput") && !id.starts_with("file.import"))
+        .map(str::to_owned);
     let r = app.session.execute(id, Value::Object(p)).map_err(|e| e.to_string());
+    if let Some(path) = selected_path
+        && let Some(completed) = &app.hooks.file_dialog_written
+    {
+        completed(&path, r.as_ref().map(|_| ()).map_err(Clone::clone));
+    }
     if let Err(e) = &r {
         app.ui.status = e.clone();
     }
@@ -1598,7 +1619,7 @@ pub fn menu_items(app: &EffectcraftApp) -> Vec<MenuItem> {
 
 /// Shortcut text in this OS's notation (`⇧⌘K` on macOS, `Ctrl+Shift+K` elsewhere).
 pub fn shortcut_text(s: &str) -> String {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
         let mut out = String::new();
         let parts: Vec<&str> = match s.strip_suffix("++") {
             Some(head) => vec![head, "+"],
@@ -1644,8 +1665,8 @@ pub fn parse_shortcut(s: &str) -> Option<(egui::Modifiers, egui::Key)> {
         match p {
             "Cmd" => {
                 m.command = true;
-                m.mac_cmd = cfg!(target_os = "macos");
-                if !cfg!(target_os = "macos") {
+                m.mac_cmd = cfg!(any(target_os = "macos", target_os = "ios"));
+                if !cfg!(any(target_os = "macos", target_os = "ios")) {
                     m.ctrl = true;
                 }
             }
@@ -1702,7 +1723,7 @@ pub fn bindings(session: &effectcraft_engine::Session) -> Vec<Binding> {
         }
         // Off macOS `Cmd` is Ctrl, so a custom Ctrl+Cmd shortcut would
         // steal the plain Cmd one: such macOS-only shortcuts aren't bound there.
-        if !cfg!(target_os = "macos") && sc.split('+').any(|p| p == "Ctrl") && sc.split('+').any(|p| p == "Cmd") {
+        if !cfg!(any(target_os = "macos", target_os = "ios")) && sc.split('+').any(|p| p == "Ctrl") && sc.split('+').any(|p| p == "Cmd") {
             continue;
         }
         if let Some((m, k)) = parse_shortcut(sc) {
@@ -1719,7 +1740,10 @@ pub fn bindings(session: &effectcraft_engine::Session) -> Vec<Binding> {
 }
 
 fn mods_match(want: egui::Modifiers, got: egui::Modifiers) -> bool {
-    want.command == got.command && want.shift == got.shift && want.alt == got.alt && (want.ctrl == got.ctrl || got.command && cfg!(not(target_os = "macos")))
+    want.command == got.command
+        && want.shift == got.shift
+        && want.alt == got.alt
+        && (want.ctrl == got.ctrl || got.command && cfg!(not(any(target_os = "macos", target_os = "ios"))))
 }
 
 /// Set (egui temp data) from a plain Spacebar press until its release while a tap would still
@@ -2212,7 +2236,7 @@ mod tests {
     fn full_screen_default_is_platform_specific() {
         let app = EffectcraftApp::new(effectcraft_engine::Session::default());
         let full_screen = app.session.shortcuts().shortcut_of("view.fullScreen", &Value::Null);
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "ios")) {
             assert_eq!(full_screen, Some("Ctrl+Cmd+F"));
         } else {
             assert_eq!(full_screen, None);
@@ -2472,6 +2496,14 @@ mod tests {
         let pending: Arc<Mutex<Vec<(crate::FileDialog, crate::DialogDone)>>> = Arc::default();
         let queue = pending.clone();
         app.hooks.file_dialog_async = Some(Box::new(move |dialog, done| queue.lock().unwrap().push((dialog, done))));
+        let completed: Arc<Mutex<Vec<(String, bool)>>> = Arc::default();
+        let results = completed.clone();
+        app.hooks.file_dialog_written = Some(Box::new(move |path, result| {
+            if result.is_ok() {
+                assert!(std::path::Path::new(path).is_file(), "notify the host only after writing");
+            }
+            results.lock().unwrap().push((path.to_owned(), result.is_ok()));
+        }));
         assert_eq!(invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap(), json!({"dialog": "file.saveAs"}));
         let (dialog, done) = pending.lock().unwrap().pop().expect("a dialog was shown");
         assert_eq!(dialog, crate::FileDialog::Save { default: "Untitled Project.ecproj".into(), ext: "ecproj".into(), project: true });
@@ -2484,6 +2516,8 @@ mod tests {
         app.run_dialog_answers();
         assert_eq!(app.session.path.as_deref(), Some(dir.join("Answered.ecproj").to_string_lossy().as_ref()));
         assert!(dir.join("Answered.ecproj").is_file());
+        assert_eq!(completed.lock().unwrap().len(), 1);
+        assert!(completed.lock().unwrap()[0].1);
         // Cancelled: nothing runs.
         invoke(&mut app, &ctx, "comp.saveFrameAs", json!({})).unwrap();
         let (dialog, done) = pending.lock().unwrap().pop().expect("a dialog was shown");
@@ -2491,6 +2525,13 @@ mod tests {
         done(Vec::new());
         app.run_dialog_answers();
         assert!(!dir.join("Frame.png").exists());
+        assert_eq!(completed.lock().unwrap().len(), 1, "cancellation does not export");
+        invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        let (_, done) = pending.lock().unwrap().pop().unwrap();
+        done(vec![dir.join("missing").join("Failed.ecproj").to_string_lossy().into_owned()]);
+        app.run_dialog_answers();
+        assert_eq!(completed.lock().unwrap().len(), 2);
+        assert!(!completed.lock().unwrap()[1].1, "a failed write never exports");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

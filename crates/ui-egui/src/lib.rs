@@ -138,9 +138,20 @@ pub(crate) struct DialogAnswer {
     pub paths: Vec<String>,
 }
 
+/// Host display controls embedded in Preferences ▸ Appearance, with live preview and OK/Cancel.
+pub trait HostDisplayPreferences {
+    fn opened(&mut self);
+    fn show(&mut self, ui: &mut egui::Ui, registry: &mut automation::Registry);
+    fn closed(&mut self, save: bool, session: &mut effectcraft_engine::Session);
+}
+
 /// Host hooks provided by the native app (file pickers etc.).
 #[derive(Default)]
 pub struct Hooks {
+    pub display_preferences: Option<Box<dyn HostDisplayPreferences>>,
+    /// Host-specific horizontal safe bounds for menus and tools (for phone display cutouts).
+    /// The workspace can occupy wider bounds below this chrome; desktop hosts leave this unset.
+    pub chrome_safe_rect: Option<egui::Rect>,
     /// The system appearance for Settings ▸ Appearance ▸ Sync with System (the desktop app reads
     /// the Linux desktop portal); without it, what egui reports.
     pub system_theme: Option<SystemThemeFn>,
@@ -166,6 +177,8 @@ pub struct Hooks {
     /// the commands' dialogs (File ▸ Import, Open, Save As…) where a modal dialog's nested event
     /// loop inside a frame is unsafe: on macOS a drag over the window then aborted the app (#511).
     pub file_dialog_async: Option<Box<dyn Fn(FileDialog, DialogDone)>>,
+    /// Reports a dialog-selected file after its command finishes writing (native mobile export).
+    pub file_dialog_written: Option<Box<dyn Fn(&str, Result<(), String>)>>,
     /// Tells the user the graphics device was lost and the window is closing, once. `saved` is
     /// the auto-save of unsaved changes (`None`: nothing was unsaved), its path or why it failed.
     pub device_lost: Option<Box<dyn Fn(Option<Result<String, String>>)>>,
@@ -1684,16 +1697,21 @@ impl EffectcraftApp {
             ui.disable();
         }
         ui.painter().rect_filled(full, 0.0, t.app_bg);
+        let chrome = self.hooks.chrome_safe_rect.unwrap_or(full).intersect(full);
         let mut top = full.min.y;
         if self.ui.show_menu_bar {
-            let mb = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), 24.0));
+            let band = egui::Rect::from_min_size(egui::pos2(full.min.x, top), egui::vec2(full.width(), 24.0));
+            ui.painter().rect_filled(band, 0.0, t.header_bg);
+            let mb = egui::Rect::from_min_size(egui::pos2(chrome.min.x, top), egui::vec2(chrome.width(), 24.0));
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(mb));
             child.painter().rect_filled(mb, 0.0, t.header_bg);
             menus::menu_bar(self, &mut child);
             top = mb.max.y;
         }
         let header_h = 40.0;
-        let header = egui::Rect::from_min_size(egui::pos2(full.min.x, top), egui::vec2(full.width(), header_h));
+        let header_band = egui::Rect::from_min_size(egui::pos2(full.min.x, top), egui::vec2(full.width(), header_h));
+        ui.painter().rect_filled(header_band, 0.0, t.header_bg);
+        let header = egui::Rect::from_min_size(egui::pos2(chrome.min.x, top), egui::vec2(chrome.width(), header_h));
         header::show(self, ui, header);
         let body = egui::Rect::from_min_max(egui::pos2(full.min.x + 4.0, header.max.y + 2.0), egui::pos2(full.max.x - 4.0, full.max.y - 4.0));
         self.dock_area(ui, body);

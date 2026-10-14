@@ -400,7 +400,20 @@ fn output_to_menu(it: &RenderQueueItem) -> Vec<(String, Value)> {
 /// (folder and name, which ends in the format's extension) and offers that extension. `None`
 /// when the host has no save dialog; `Some(None)` when the dialog was cancelled.
 fn pick_output(app: &EffectcraftApp, it: &RenderQueueItem) -> Option<Option<String>> {
-    app.hooks.save_dialog(&app.session.resolve_output(it).unwrap_or_default())
+    let default = app.session.resolve_output(it).unwrap_or_default();
+    if let Some(pick) = &app.hooks.file_dialog_async {
+        let tx = app.dialog_answers.0.clone();
+        let item = it.id;
+        pick(
+            crate::FileDialog::save(&default),
+            Box::new(move |paths| {
+                let _ = tx.send(crate::DialogAnswer { command: "renderQueue.setOutput".into(), key: "path", params: json!({"item": item}), paths });
+            }),
+        );
+        Some(None)
+    } else {
+        app.hooks.save_dialog(&default)
+    }
 }
 
 pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
@@ -728,7 +741,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 lp.with_clip_rect(path_rect.intersect(list)).text(pos2(path_rect.min.x, r.center().y), Align2::LEFT_CENTER, &shown, Tokens::ui(11.5), col);
                 // Clicking the file name opens the save dialog (Output Movie To); Alt-click, or a
                 // host without one, edits the name template in place.
-                let dialog = app.hooks.pick_save_file.is_some();
+                let dialog = app.hooks.pick_save_file.is_some() || app.hooks.file_dialog_async.is_some();
                 if resp.clicked() && !rendering {
                     let picked = if ui.input(|i| i.modifiers.alt) { None } else { pick_output(app, it) };
                     match picked {

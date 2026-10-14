@@ -148,7 +148,13 @@ fn err(e: impl std::fmt::Display) -> Outcome {
 fn modifiers(p: &Value) -> egui::Modifiers {
     let m = p.get("modifiers").unwrap_or(p);
     let b = |k: &str| m.get(k).and_then(Value::as_bool).unwrap_or(false);
-    egui::Modifiers { alt: b("alt"), ctrl: b("ctrl"), shift: b("shift"), mac_cmd: cfg!(target_os = "macos") && b("command"), command: b("command") }
+    egui::Modifiers {
+        alt: b("alt"),
+        ctrl: b("ctrl"),
+        shift: b("shift"),
+        mac_cmd: cfg!(any(target_os = "macos", target_os = "ios")) && b("command"),
+        command: b("command"),
+    }
 }
 
 /// Resolve a point from `{id}` (element centre) or `{x, y}`.

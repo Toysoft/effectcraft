@@ -71,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
         fe!("view.layerControls", "Show Layer Controls", ["View"], Some("Cmd+Shift+H"), "{value?}", always),
         // macOS uses Control+Command+F for native full screen. On Windows and Linux,
         // Cmd maps to Ctrl; the After Effects-style Ctrl+\ is window.maximizeApp.
-        fe!("view.fullScreen", "Enter Full Screen", ["View"], cfg!(target_os = "macos").then_some("Ctrl+Cmd+F"), "{}", always),
+        fe!("view.fullScreen", "Enter Full Screen", ["View"], cfg!(any(target_os = "macos", target_os = "ios")).then_some("Ctrl+Cmd+F"), "{}", always),
         fe!(
             "view.newViewer",
             "New Viewer",
