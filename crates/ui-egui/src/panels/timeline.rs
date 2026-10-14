@@ -2990,8 +2990,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         && outline_empty.dragged()
     {
         let box_rect = Rect::from_two_pos(start, end).intersect(outline_rect);
-        lp.rect_filled(box_rect, 0.0, t.accent.gamma_multiply(0.12));
-        lp.rect_stroke(box_rect, 0.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+        lp.rect_filled(box_rect, 0.0, t.editing_accent().gamma_multiply(0.12));
+        lp.rect_stroke(box_rect, 0.0, Stroke::new(1.0, t.editing_accent()), StrokeKind::Inside);
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("tl-layer-box"), box_rect));
     }
     if outline_empty.drag_stopped()
@@ -3011,8 +3011,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     if let Some((kind, src_layer, src_prop, start)) = ctx.data(|d| d.get_temp::<PickWhip>(pick_whip_id())) {
         let ptr = ctx.input(|i| i.pointer.latest_pos()).unwrap_or(start);
         let fg = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tl-pickwhip-line")));
-        fg.line_segment([start, ptr], Stroke::new(1.5, t.accent));
-        fg.circle_stroke(ptr, 4.0, Stroke::new(1.5, t.accent));
+        fg.line_segment([start, ptr], Stroke::new(1.5, t.editing_accent()));
+        fg.circle_stroke(ptr, 4.0, Stroke::new(1.5, t.editing_accent()));
         let target = hit_rows.iter().find(|(r, _)| r.contains(ptr)).map(|(r, row)| (*r, row.clone()));
         // Shown this pass or the last one (Effect Controls may draw after the Timeline).
         let pass = ctx.cumulative_pass_nr();
@@ -3022,9 +3022,9 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             .filter(|(p, _)| p.saturating_add(1) >= pass)
             .and_then(|(_, targets)| targets.into_iter().find(|(r, ..)| r.contains(ptr)));
         if let Some((tr, _)) = &target {
-            fg.rect_stroke(Rect::from_min_max(tr.min, pos2(graph_x0 - 1.0, tr.max.y)), 0.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+            fg.rect_stroke(Rect::from_min_max(tr.min, pos2(graph_x0 - 1.0, tr.max.y)), 0.0, Stroke::new(1.0, t.editing_accent()), StrokeKind::Inside);
         } else if let Some((tr, ..)) = &elsewhere {
-            fg.rect_stroke(*tr, 0.0, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+            fg.rect_stroke(*tr, 0.0, Stroke::new(1.0, t.editing_accent()), StrokeKind::Inside);
         }
         if ctx.input(|i| !i.pointer.any_down()) {
             ctx.data_mut(|d| {
@@ -3083,8 +3083,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         (empty.dragged(), empty.interact_pointer_pos().and_then(|_| ctx.input(|i| i.pointer.press_origin())), empty.interact_pointer_pos())
     {
         let br = Rect::from_two_pos(origin, cur);
-        gp.rect_filled(br, 0.0, t.accent.gamma_multiply(0.12));
-        gp.rect_stroke(br, 0.0, Stroke::new(1.0, t.accent), StrokeKind::Middle);
+        gp.rect_filled(br, 0.0, t.editing_accent().gamma_multiply(0.12));
+        gp.rect_stroke(br, 0.0, Stroke::new(1.0, t.editing_accent()), StrokeKind::Middle);
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("tl-box"), br));
     }
     // Layer reorder drag: a line where the layers will land; the release moves them there.
@@ -3111,7 +3111,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
             } else {
                 ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-                p.with_clip_rect(rows_rect).line_segment([pos2(rect.min.x, line_y), pos2(graph_x0, line_y)], Stroke::new(2.0, t.accent));
+                p.with_clip_rect(rows_rect).line_segment([pos2(rect.min.x, line_y), pos2(graph_x0, line_y)], Stroke::new(2.0, t.editing_accent()));
             }
         } else if dropped {
             ctx.data_mut(|d| d.remove::<Vec<u64>>(layer_drag_id()));
@@ -3330,7 +3330,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     {
         let released = ctx.input(|i| i.pointer.any_released());
         if let crate::panels::DragPayload::Effect(e) = payload.as_ref() {
-            p.rect_stroke(rows_rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+            p.rect_stroke(rows_rect, 0.0, Stroke::new(2.0, t.editing_accent()), StrokeKind::Inside);
             let target = hit_rows.iter().find(|(r, _)| ptr.y >= r.min.y && ptr.y < r.max.y).map(|(_, row)| row.layer);
             if released && let Some(l) = target {
                 actions.push(("effect.apply".into(), json!({"effect": e, "layers": [l.0]})));
@@ -3347,14 +3347,14 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 comp.frame_rate.snap_nearest(t).clamp(Tick::ZERO, comp.duration - comp.frame_duration())
             });
             let rp = p.with_clip_rect(rows_rect);
-            rp.line_segment([pos2(rect.min.x, line_y), pos2(rows_rect.max.x, line_y)], Stroke::new(2.0, t.accent));
+            rp.line_segment([pos2(rect.min.x, line_y), pos2(rows_rect.max.x, line_y)], Stroke::new(2.0, t.editing_accent()));
             if let Some(s) = start {
                 let x = tm.x(s.seconds());
-                rp.line_segment([pos2(x, rows_rect.min.y), pos2(x, rows_rect.max.y)], Stroke::new(1.0, t.accent));
+                rp.line_segment([pos2(x, rows_rect.min.y), pos2(x, rows_rect.max.y)], Stroke::new(1.0, t.editing_accent()));
                 // The In point's time in a tag beside the marker.
                 let g = rp.layout_no_wrap(super::timecode(&app.session, &comp, s), Tokens::ui(11.0), Color32::WHITE);
                 let tag = Align2::LEFT_BOTTOM.anchor_size(pos2(x + 4.0, line_y - 3.0), g.size());
-                rp.rect_filled(tag.expand(2.0), 2.0, t.accent);
+                rp.rect_filled(tag.expand(2.0), 2.0, t.editing_accent());
                 rp.galley(tag.min, g, Color32::WHITE);
             }
             if released {

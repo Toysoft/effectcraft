@@ -119,6 +119,11 @@ pub fn gradient_rect(painter: &egui::Painter, rect: egui::Rect, top: Color32, bo
 }
 
 impl Tokens {
+    /// Composition and timeline editing cues keep their original colour across UI refreshes.
+    pub(crate) fn editing_accent(&self) -> Color32 {
+        if self.kind == ThemeKind::Dark { Color32::from_rgb(0x2d, 0x8c, 0xeb) } else { self.accent }
+    }
+
     /// Foreground for a filled accent control in the standard dark palette.
     pub fn on_accent(&self) -> Color32 {
         if self.kind == ThemeKind::Dark { craft_ui::theme::SuiteDarkPalette::ARTCRAFT.on_accent } else { Color32::WHITE }
@@ -700,6 +705,7 @@ mod tests {
         assert_eq!(dark.tab_text_active, roles.text_strong);
         assert_eq!(dark.focus, roles.focus);
         assert_eq!(dark.accent, roles.accent);
+        assert_eq!(dark.editing_accent(), Color32::from_rgb(0x2d, 0x8c, 0xeb));
         assert_eq!(dark.accent_hover, roles.accent_hover);
         assert_eq!(dark.text, roles.text);
         assert_eq!(dark.text_dim, roles.text_secondary);
@@ -761,6 +767,8 @@ mod tests {
         assert_eq!(darker.accent, Color32::from_rgb(0x2d, 0x8c, 0xeb));
         assert_eq!(light.panel_bg, Color32::from_rgb(0xe6, 0xe6, 0xe6));
         assert_eq!(light.on_accent(), Color32::WHITE);
+        assert_eq!(light.editing_accent(), light.accent);
+        assert_eq!(darker.editing_accent(), darker.accent);
         assert_eq!(dark.cache_green, darker.cache_green);
         assert_eq!(dark.labels, light.labels);
     }

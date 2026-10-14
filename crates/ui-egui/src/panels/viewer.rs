@@ -997,7 +997,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let hs = app.session.prefs.general.path_point_size as f32 + 2.0;
         let label_handles = app.session.prefs.appearance.use_label_color_for_handles;
         for l in comp.layers.iter().filter(|l| selected.contains(&l.id) && l.is_active_at(time)) {
-            let col = if label_handles { t.label(l.label) } else { t.accent };
+            let col = if label_handles { t.label(l.label) } else { t.editing_accent() };
             // Motion path of animated position (keyframes and spatial tangents are draggable).
             ov::motion_path(app, &painter, &map, &ectx, l, col, &mut key_hits, &mut motion_frames);
             // Masks and shape paths.
@@ -1782,8 +1782,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             Gesture::ObjectMatteBox { start } => super::object_matte_tool::draw_box(app, &painter, start, pos),
             Gesture::Marquee { start } | Gesture::PinMarquee { start } => {
                 let r = Rect::from_two_pos(start, pos);
-                painter.rect_filled(r, 0.0, t.accent.gamma_multiply(0.12));
-                painter.rect_stroke(r, 0.0, Stroke::new(1.0, t.accent), StrokeKind::Middle);
+                painter.rect_filled(r, 0.0, t.editing_accent().gamma_multiply(0.12));
+                painter.rect_stroke(r, 0.0, Stroke::new(1.0, t.editing_accent()), StrokeKind::Middle);
             }
         }
     }
@@ -2436,7 +2436,7 @@ fn draw_shape_ghost(painter: &egui::Painter, map: &ViewerMap, app: &EffectcraftA
             let stroke_on = tool.stroke.kind != PaintKind::None && tool.stroke_width > 0.0;
             (
                 if tool.fill.kind == PaintKind::None { Color32::TRANSPARENT } else { paint_rgb(tool.fill.color, tool.fill.opacity, 0.45) },
-                if stroke_on { paint_rgb(tool.stroke.color, tool.stroke.opacity, 1.0) } else { t.accent },
+                if stroke_on { paint_rgb(tool.stroke.color, tool.stroke.opacity, 1.0) } else { t.editing_accent() },
             )
         }
     };

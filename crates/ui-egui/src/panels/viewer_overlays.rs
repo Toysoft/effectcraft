@@ -465,7 +465,7 @@ pub(crate) fn draw_free_transform(
         f.handles[i] = map.to_screen([c.x, c.y]);
     }
     f.quad = [f.handles[0], f.handles[1], f.handles[2], f.handles[3]];
-    let col = app.tokens.accent;
+    let col = app.tokens.editing_accent();
     painter.add(egui::Shape::closed_line(f.quad.to_vec(), Stroke::new(1.0, col)));
     for (i, h) in f.handles.iter().enumerate() {
         let r = Rect::from_center_size(*h, vec2(7.0, 7.0));
