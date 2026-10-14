@@ -1634,7 +1634,11 @@ pub fn viewer_hook(
                     let id = egui::Id::new(("viewer-fx-pt", pr.uid));
                     // The picker owns the click. Preview handles must not steal it or start a drag.
                     let resp = (!picking).then(|| ui.interact(hr, id, Sense::drag()));
-                    let col = if picked_prop == Some(pr.uid) || resp.as_ref().is_some_and(|r| r.hovered() || r.dragged()) { t.accent } else { Color32::WHITE };
+                    let col = if picked_prop == Some(pr.uid) || resp.as_ref().is_some_and(|r| r.hovered() || r.dragged()) {
+                        t.editing_accent()
+                    } else {
+                        Color32::WHITE
+                    };
                     fw::draw_crosshair(painter, s + vec2(1.0, 1.0), 5.0, Color32::from_black_alpha(160));
                     fw::draw_crosshair(painter, s, 5.0, col);
                     app.auto.add(&format!("viewer.effectPoint.{}", pr.uid), hr, &pr.name);

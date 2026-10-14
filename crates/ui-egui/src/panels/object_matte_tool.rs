@@ -45,7 +45,7 @@ fn outline(ectx: &EvalCtx, map: &ViewerMap, layer: &Layer) -> [Pos2; 4] {
 /// Hover preview at `hp` (screen): the outline of the layer that would get the matte and a
 /// crosshair where the object point would go.
 pub fn hover(app: &mut EffectcraftApp, painter: &egui::Painter, map: &ViewerMap, ectx: &EvalCtx, hp: Pos2) {
-    let accent = app.tokens.accent;
+    let accent = app.tokens.editing_accent();
     let cpt = map.to_comp(hp);
     if let Some(layer) = target(app, ectx, cpt) {
         let q = outline(ectx, map, layer);
@@ -69,7 +69,7 @@ pub fn hover(app: &mut EffectcraftApp, painter: &egui::Painter, map: &ViewerMap,
 /// The box being dragged (screen `a`–`b`).
 pub fn draw_box(app: &mut EffectcraftApp, painter: &egui::Painter, a: Pos2, b: Pos2) {
     let r = Rect::from_two_pos(a, b);
-    let accent = app.tokens.accent;
+    let accent = app.tokens.editing_accent();
     painter.rect_stroke(r, 0.0, Stroke::new(2.5, Color32::from_black_alpha(140)), StrokeKind::Middle);
     painter.rect_stroke(r, 0.0, Stroke::new(1.5, accent), StrokeKind::Middle);
     painter.circle_filled(r.center(), 2.5, accent);

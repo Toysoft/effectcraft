@@ -21,7 +21,7 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &egui::Ui, painter: &egui::Pain
         return;
     }
     let Some(ptr) = ctx.input(|i| i.pointer.hover_pos()).filter(|_| ui.rect_contains_pointer(map.area)) else { return };
-    let stroke = Stroke::new(2.0, app.tokens.accent);
+    let stroke = Stroke::new(2.0, app.tokens.editing_accent());
     let at = map.to_comp(ptr);
     let actions: Vec<(&str, Value)> = match payload.as_ref() {
         DragPayload::Effect(effect) => layer_at(ectx, at)
@@ -36,7 +36,7 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &egui::Ui, painter: &egui::Pain
         DragPayload::Item(item) => {
             // The layer's frame, centred on the pointer.
             if let Some([w, h]) = app.session.project.item(ItemId(*item)).and_then(|it| frame_size(&it.kind, ectx.comp.pixel_aspect)) {
-                painter.rect_stroke(Rect::from_center_size(ptr, vec2(w, h) * map.zoom), 0.0, Stroke::new(1.0, app.tokens.accent), StrokeKind::Middle);
+                painter.rect_stroke(Rect::from_center_size(ptr, vec2(w, h) * map.zoom), 0.0, Stroke::new(1.0, app.tokens.editing_accent()), StrokeKind::Middle);
             }
             // New layers go above the current selection, so insert in reverse
             // to preserve the order of the dragged Project items.

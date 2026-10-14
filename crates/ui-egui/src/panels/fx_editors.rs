@@ -1083,7 +1083,7 @@ pub fn mesh_warp_overlay(
         }
     }
     let ctx = ui.ctx().clone();
-    let accent = app.tokens.accent;
+    let accent = app.tokens.editing_accent();
     for (k, s) in screen.iter().enumerate() {
         let hr = Rect::from_center_size(*s, vec2(10.0, 10.0));
         let id = egui::Id::new(("mesh-warp-vertex", g.uid, k));

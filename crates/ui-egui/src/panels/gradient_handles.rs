@@ -78,7 +78,7 @@ pub fn viewer_hook(
                 let hr = Rect::from_center_size(s, vec2(16.0, 16.0));
                 let id = egui::Id::new(("viewer-gradient-pt", pr.uid));
                 let resp = ui.interact(hr, id, Sense::drag());
-                let col = if resp.hovered() || resp.dragged() { t.accent } else { Color32::WHITE };
+                let col = if resp.hovered() || resp.dragged() { t.editing_accent() } else { Color32::WHITE };
                 fw::draw_crosshair(painter, s + vec2(1.0, 1.0), 5.0, Color32::from_black_alpha(160));
                 fw::draw_crosshair(painter, s, 5.0, col);
                 app.auto.add(&format!("viewer.gradientPoint.{}", pr.uid), hr, &pr.name);
