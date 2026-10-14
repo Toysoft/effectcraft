@@ -2400,6 +2400,16 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     },
                 );
                 gp.rect_filled(Rect::from_min_max(pos2(graph_x0, r.min.y), r.max), 0.0, t.tl_bg);
+                // An effect's colour label (26.5): the same bar the Effect Controls header wears,
+                // on the row's left edge.
+                if let Some(lab) =
+                    group.filter(|g| matches!(g.kind, GroupKind::Effect { .. })).and_then(|g| g.label).filter(|l| *l != effectcraft_engine::color::Label::None)
+                {
+                    let [lr, lg, lb] = app.session.prefs.label_rgb(lab);
+                    let bar = Rect::from_min_size(left.min, vec2(4.0, left.height()));
+                    lp.rect_filled(bar, 0.0, Color32::from_rgb(lr, lg, lb));
+                    app.auto.add(&format!("timeline.group.{uid}.label"), bar, &app.session.prefs.label_name(lab));
+                }
                 let indent = cw.name + 6.0 + 14.0 * row.depth as f32;
                 if *has_children {
                     let tw = Rect::from_center_size(pos2(indent, cy), vec2(13.0, 13.0));
