@@ -70,6 +70,32 @@ fn a_hostile_project_opens_within_the_limits_and_says_what_changed() {
 }
 
 #[test]
+fn a_project_whose_id_counter_is_exhausted_is_refused_and_the_session_carries_on() {
+    // A saved project whose id counter is at the top of the range: the next new layer, key or
+    // effect would overflow it, or wrap to ids already in use (#1251).
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Main", "width": 64, "height": 32, "frameRate": 30, "duration": 2})).unwrap();
+    s.execute("layer.newSolid", json!({"color": "#ff0000", "width": 64, "height": 2})).unwrap();
+    let mut v: Value = serde_json::from_str(&s.project.to_file_json().unwrap()).unwrap();
+    v["next_id"] = json!(u64::MAX);
+    let path = tmp("exhausted.ecproj");
+    std::fs::write(&path, v.to_string()).unwrap();
+
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Mine", "width": 64, "height": 32, "frameRate": 30, "duration": 2})).unwrap();
+    let before = s.project.next_id;
+    for cmd in ["file.open", "file.importProject"] {
+        let e = s.execute(cmd, json!({"path": path})).expect_err(cmd);
+        assert!(e.to_string().contains("ids"), "{cmd}: {e}");
+        assert_eq!(s.project.next_id, before, "{cmd} left the open project alone");
+    }
+    // New ids keep coming from the open project's own counter.
+    let l = s.execute("layer.newSolid", json!({"color": "#00ff00", "width": 8, "height": 8})).unwrap()["layer"].as_u64().unwrap();
+    assert!(l >= before && l < limits::MAX_NEXT_ID);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn a_project_within_the_limits_opens_unchanged() {
     let mut s = Session::default();
     s.execute("comp.new", json!({"name": "Main", "width": 64, "height": 32, "frameRate": 24, "duration": 2})).unwrap();
@@ -101,4 +127,39 @@ fn commands_cap_sizes_at_30000_px() {
     s.execute("file.importPlaceholder", json!({"width": 4_000_000_000u64, "height": 8, "frameRate": 0})).unwrap();
     let f = s.project.items.values().find_map(|i| if let ItemKind::Footage(f) = &i.kind { Some(f.clone()) } else { None }).unwrap();
     assert_eq!((f.width, f.height, f.frame_rate), (limits::MAX_SIZE, 8, FrameRate::FPS_29_97));
+}
+
+#[test]
+fn a_project_with_a_precomp_cycle_opens_adds_and_renders_without_running_out_of_stack() {
+    // Comps A and B nest each other (a damaged file); C is unrelated. Checking whether A
+    // contains C walked the A ⇄ B cycle until the stack ran out (#1237).
+    let mut s = Session::default();
+    let mut ids = vec![];
+    for name in ["A", "B", "C"] {
+        s.execute("comp.new", json!({"name": name, "width": 32, "height": 32, "frameRate": 30, "duration": 1})).unwrap();
+        ids.push(s.active_comp_id().unwrap());
+    }
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    {
+        let proj = std::sync::Arc::make_mut(&mut s.project);
+        for (outer, inner) in [(a, b), (b, a)] {
+            let comp = proj.comp(outer).unwrap().clone();
+            let l = effectcraft_project::build::layer(proj, &comp, "pre", effectcraft_project::LayerSource::Comp { item: inner }, (32, 32), None);
+            let ItemKind::Comp(cc) = &mut proj.item_mut(outer).unwrap().kind else { panic!("comp") };
+            std::sync::Arc::make_mut(cc).layers.push(l);
+        }
+    }
+    let path = tmp("cycle.ecproj");
+    std::fs::write(&path, s.project.to_file_json().unwrap()).unwrap();
+    let mut t = Session::default();
+    t.execute("file.open", json!({"path": path})).unwrap();
+    t.open_comp(c);
+    // Adding A into C asks whether A contains C: it doesn't, so the layer goes in.
+    let r = t.execute("layer.addItem", json!({"comp": c.0, "item": a.0})).unwrap();
+    assert!(r["layer"].as_u64().is_some(), "{r}");
+    // Adding C into A would nest C in itself through A: refused, as before.
+    assert!(t.execute("layer.addItem", json!({"comp": a.0, "item": c.0})).is_err());
+    // C renders: inside A the renderer skips B's copy of A instead of looping.
+    let img = t.render(c, Tick::ZERO, RenderOpts { scale: 1.0, ..Default::default() });
+    assert_eq!((img.width, img.height), (32, 32));
 }
