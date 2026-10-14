@@ -25,9 +25,12 @@ fn parts(path: &str) -> Vec<&str> {
     path.split(['/', '\\']).filter(|p| !p.is_empty()).collect()
 }
 
-/// The separator `path` uses (Windows paths keep theirs).
+/// The separator `path` uses. A Windows path keeps `\`: one with a drive letter or on a
+/// `\\server` share, also when a `/` crept in (`C:\Job/shots`, as `Path::join("shots/a.png")`
+/// writes it on Windows), or one with only `\`; anything else uses `/`.
 fn sep_of(path: &str) -> char {
-    if path.contains('\\') && !path.contains('/') { '\\' } else { '/' }
+    let drive = matches!(path.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic());
+    if drive || path.starts_with("\\\\") || (path.contains('\\') && !path.contains('/')) { '\\' } else { '/' }
 }
 
 fn file_name(path: &str) -> &str {
@@ -126,17 +129,19 @@ pub(crate) fn find_moved(services: &dyn Services, project_dir: &str, f: &Footage
     })
 }
 
-/// The folder a project file is in.
+/// The folder a project file is in, written with the project path's own separator and start (a
+/// `/`, a `\\server` share or a drive letter).
 pub(crate) fn project_dir(project_path: &str) -> Option<String> {
     let p = parts(project_path);
-    if p.len() < 2 {
-        return None;
-    }
-    let mut dir = join(if project_path.starts_with('/') { "/" } else { "" }, p.get(..p.len() - 1)?);
-    if !project_path.starts_with('/') {
-        dir = dir.trim_start_matches(['/', '\\']).to_string();
-    }
-    Some(dir)
+    let dir = p.get(..p.len().checked_sub(1)?).filter(|d| !d.is_empty())?;
+    let lead = if project_path.starts_with('/') {
+        "/"
+    } else if project_path.starts_with("\\\\") {
+        "\\\\"
+    } else {
+        ""
+    };
+    Some(format!("{lead}{}", dir.join(&sep_of(project_path).to_string())))
 }
 
 /// Relink `found` in one undo step and say how many.
@@ -262,6 +267,13 @@ mod tests {
         );
         assert_eq!(project_dir("/x/y/p.ecproj").as_deref(), Some("/x/y"));
         assert_eq!(project_dir("p.ecproj"), None);
+        // Windows paths stay Windows paths, a stray `/` included (`Path::join("shots/a.png")`).
+        assert_eq!(project_dir("C:\\Jobs\\Job/p.ecproj").as_deref(), Some("C:\\Jobs\\Job"));
+        assert_eq!(project_dir("\\\\srv\\share\\p.ecproj").as_deref(), Some("\\\\srv\\share"));
+        assert_eq!(moved_candidates("C:\\new\\p", "/old/p/shots/a.mov").last().map(String::as_str), Some("C:\\new\\p\\a.mov"));
+        let (old, new) = moved_root("/gone/proj/shots/a.mov", "C:\\T\\moved\\shots/a.mov").unwrap();
+        assert_eq!((old, new.as_str()), (vec!["gone", "proj"], "C:\\T\\moved"));
+        assert_eq!(remap("/gone/proj/audio/m.wav", &["gone", "proj"], &new).as_deref(), Some("C:\\T\\moved\\audio\\m.wav"));
         // Hostile input doesn't panic.
         for (a, b) in [("", ""), ("/", "/"), ("x", ""), ("\\\\", "//"), ("/a", "/a/b/c")] {
             let _ = moved_root(a, b);
@@ -302,11 +314,12 @@ mod tests {
         let b = add(&mut s, "/gone/proj/shots/b.mov");
         let m = add(&mut s, "/gone/proj/audio/m.wav");
         let other = add(&mut s, "/elsewhere/c.mov");
-        let target = new.join("shots/a.mov").to_string_lossy().to_string();
+        // (Joined part by part: `Path::join("shots/a.mov")` would leave a `/` in a Windows path.)
+        let target = new.join("shots").join("a.mov").to_string_lossy().to_string();
         let r = s.execute("footage.relink", json!({"item": a.0, "path": target})).unwrap();
         assert_eq!(r["relinked"], json!([a.0, b.0, m.0]), "{r}");
         assert_eq!(r["stillMissing"], 1);
-        assert_eq!(path_of(&s, m), new.join("audio/m.wav").to_string_lossy());
+        assert_eq!(path_of(&s, m), new.join("audio").join("m.wav").to_string_lossy());
         assert_eq!(path_of(&s, other), "/elsewhere/c.mov");
         // One undo step brings every path back.
         s.execute("edit.undo", json!({})).unwrap();
