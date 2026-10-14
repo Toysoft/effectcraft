@@ -272,7 +272,10 @@ fn prop_row(
     let name_clip = Rect::from_min_max(pos2(swr.max.x + 6.0, r.min.y), pos2(vx - 6.0, r.max.y));
     app.auto.add(&format!("effectControls.prop.{uid}.name"), name_clip, &prop.name);
     p.with_clip_rect(name_clip.intersect(p.clip_rect())).text(pos2(swr.max.x + 6.0, cy), Align2::LEFT_CENTER, &prop.name, Tokens::ui(12.0), t.text);
-    ui.interact(name_clip, egui::Id::new(("ec-prop-name", uid)), Sense::click());
+    let name_response = ui.interact(name_clip, egui::Id::new(("ec-prop-name", uid)), Sense::click());
+    if name_response.double_clicked() && super::timeline::reveal_effect_property(app, layer.id.0, uid) {
+        app.raise_panel(crate::dock::PanelKind::Timeline);
+    }
     app.auto.add(&format!("effectControls.prop.{uid}.name"), name_clip, &prop.name);
     let merge = format!("ec-{uid}");
     // With several layers selected the edit applies to the same effect property of each (#491).

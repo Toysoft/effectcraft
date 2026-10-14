@@ -1134,6 +1134,21 @@ pub(crate) fn open_effect_paths(app: &mut EffectcraftApp, layer: u64, props: &[u
     app.ui.timeline.open_groups.extend(open);
 }
 
+/// Show an Effect Controls property in its layer's Timeline Effects view.
+pub(crate) fn reveal_effect_property(app: &mut EffectcraftApp, layer: u64, prop: u64) -> bool {
+    let Some(l) = app.session.active_comp().and_then(|c| c.layer(LayerId(layer))) else { return false };
+    let Some(fx) = l.effects().map(|g| g.uid) else { return false };
+    let path = enclosing_groups(l, prop);
+    if path.first() != Some(&fx) {
+        return false;
+    }
+    let tl = &mut app.ui.timeline;
+    tl.open_layers.insert(layer);
+    tl.layer_reveal.insert(layer, vec!["effects".into()]);
+    tl.open_groups.extend(path);
+    true
+}
+
 /// After a reveal shortcut that picks properties by state (EE expressions): those inside effects
 /// on `layers` show under their effect, twirled open.
 pub(crate) fn open_revealed(app: &mut EffectcraftApp, layers: &[u64], kinds: &[String]) {
@@ -4315,6 +4330,32 @@ mod tests {
         let ctx = egui::Context::default();
         crate::menus::invoke(&mut app, &ctx, "timeline.search", json!({"query": "scale"})).unwrap();
         assert!(labels(&app).iter().any(|r| r.trim() == "Scale"));
+    }
+
+    #[test]
+    fn reveal_effect_property_opens_layer_effect_path_in_timeline() {
+        let mut app = app();
+        let comp = app.session.active_comp().unwrap().clone();
+        let bx = comp.layers.iter().find(|l| l.name == "Box").unwrap().id.0;
+        let prop = comp
+            .layer(LayerId(bx))
+            .and_then(|layer| layer.effects())
+            .and_then(|effects| effects.groups().next())
+            .and_then(|effect| effect.get("blurriness"))
+            .unwrap()
+            .uid;
+
+        assert!(reveal_effect_property(&mut app, bx, prop));
+        assert!(app.ui.timeline.open_layers.contains(&bx));
+        assert_eq!(app.ui.timeline.layer_reveal.get(&bx), Some(&vec!["effects".to_string()]));
+
+        let rows = labels(&app);
+        let effect = rows.iter().position(|row| row.trim() == ">Gaussian Blur").unwrap();
+        assert_eq!(rows.get(effect + 1).map(String::as_str).map(str::trim), Some("Blurriness"), "{rows:?}");
+        assert!(rows.iter().any(|row| row.trim() == "Blur Dimensions"), "Effects view shows the effect's other properties too: {rows:?}");
+
+        let transform_prop = comp.layer(LayerId(bx)).and_then(|layer| layer.transform()).and_then(|group| group.get("position")).unwrap().uid;
+        assert!(!reveal_effect_property(&mut app, bx, transform_prop), "non-effect properties do not change the Effects view");
     }
 
     #[test]
