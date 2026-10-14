@@ -1306,6 +1306,7 @@ dependencies = [
  "effectcraft-psd",
  "effectcraft-raster",
  "effectcraft-render",
+ "effectcraft-sam2",
  "effectcraft-segment",
  "effectcraft-svg",
  "effectcraft-text",
@@ -1620,6 +1621,7 @@ version = "0.9.2"
 dependencies = [
  "candle-core",
  "candle-nn",
+ "effectcraft-segment",
 ]
 
 [[package]]
