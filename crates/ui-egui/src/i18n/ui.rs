@@ -47,6 +47,7 @@ fn catalog(language: &str) -> Option<&'static Index> {
     static PT_BR: OnceLock<Index> = OnceLock::new();
     static CS: OnceLock<Index> = OnceLock::new();
     static ES: OnceLock<Index> = OnceLock::new();
+    static RU: OnceLock<Index> = OnceLock::new();
     let (index, rows) = match language {
         "ja" => (&JA, JAPANESE),
         "zh-hans" => (&HANS, SIMPLIFIED_CHINESE),
@@ -55,6 +56,7 @@ fn catalog(language: &str) -> Option<&'static Index> {
         "pt-br" => (&PT_BR, PORTUGUESE),
         "cs" => (&CS, CZECH),
         "es" => (&ES, SPANISH),
+        "ru" => (&RU, RUSSIAN),
         _ => return None,
     };
     Some(index.get_or_init(|| rows.iter().copied().collect()))
@@ -4200,6 +4202,31 @@ const SPANISH: &[(&str, &str)] = &[
     ("Project", "Proyecto"),
 ];
 
+/// Russian translations for interface panels and dialogs.
+const RUSSIAN: &[(&str, &str)] = &[
+    ("Appearance Settings…", "Настройки внешнего вида…"),
+    ("Add to favorites", "Добавить в избранное"),
+    ("Remove from favorites", "Убрать из избранного"),
+    (" OK ", " ОК "),
+    (" Delete ", " Удалить "),
+    (" Open Auto-Save ", " Открыть автосохранение "),
+    ("(missing)", "(отсутствует)"),
+    ("About EffectCraft", "О программе EffectCraft"),
+    ("About...", "О программе..."),
+    ("Active", "Активен"),
+    ("Active Camera", "Активная камера"),
+    ("Alpha", "Альфа"),
+    ("Add Animator", "Добавить аниматор"),
+    ("Add Comment", "Добавить комментарий"),
+    ("Add Formatting", "Добавить форматирование"),
+    ("Add Group", "Добавить группу"),
+    ("Add Mirror", "Добавить отражение"),
+    ("Add Selected As", "Добавить выбранное как"),
+    ("Add to Composition", "Добавить в композицию"),
+    ("Add to Favorites", "Добавить в избранное"),
+    ("Add:", "Добавить:"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4302,6 +4329,7 @@ mod tests {
             .chain(PORTUGUESE.iter().copied())
             .chain(CZECH.iter().copied())
             .chain(SPANISH.iter().copied())
+            .chain(RUSSIAN.iter().copied())
             .collect()
     }
 
