@@ -27,6 +27,10 @@ cpal = { workspace = true }
 log = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# GNOME/Wayland has no server-side frame. Enable winit's Adwaita title bar and
+# vector-drawn window buttons; eframe/wayland alone does not enable decorations.
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }
+
 # Settings ▸ Appearance ▸ Sync with System: the XDG desktop portal's colour scheme. Already in
 # Cargo.lock (accesskit, through eframe), so it adds no new crates.
 zbus = "5.19"
