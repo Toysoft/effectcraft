@@ -430,6 +430,32 @@ fn save_frame_to_png_writes_behind_the_file_gate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #1246: with Warn User When Executing Files on, a script that asserts `confirmed` itself still
+/// gets the question; only the user's answer opens the file.
+#[test]
+fn a_script_cannot_confirm_executing_a_file_for_itself() {
+    let dir = std::env::temp_dir().join(format!("ec-script-exec-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("run.txt");
+    std::fs::write(&f, "x").unwrap();
+    let q = serde_json::to_string(&f.to_string_lossy()).unwrap();
+    let mut s = session();
+    // The user allows file access; the warning stays on (the default).
+    s.execute("prefs.set", json!({"key": "scripting.allowScriptsWriteFiles", "value": true})).unwrap();
+    s.drain_events();
+    let opened = |s: &mut Session| s.drain_events().iter().any(|e| matches!(e, effectcraft_engine::Event::OpenUrl(_)));
+    for code in [
+        format!("JSON.stringify(app.run('file.executeFile', {{path: {q}, confirmed: true}}))"),
+        format!("JSON.stringify(app.run('engine.batch', {{steps: [{{command: 'file.executeFile', params: {{path: {q}, confirmed: true}}}}]}}))"),
+        format!("new File({q}).execute()"),
+    ] {
+        let o = ok(&mut s, &code);
+        assert!(!o.result.to_string().contains("opened") || o.result == json!(false), "{code}: {:?}", o.result);
+        assert!(!opened(&mut s), "{code} opened the file without asking");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #590: a script can't give itself file and network access (or turn off the warning before
 /// executing files) by changing Settings ▸ Scripting & Expressions; the user still can.
 #[test]
