@@ -85,6 +85,108 @@ fn command_clicking_a_folder_twirl_opens_the_folders_inside_it() {
 }
 
 #[test]
+fn size_column_sorts_and_explains_sizes_without_swallowing_row_clicks() {
+    use effectcraft_ui_egui::theme::ThemeKind;
+    for (name, size, theme) in [
+        ("wide-dark", egui::vec2(1600.0, 1000.0), ThemeKind::Dark),
+        ("compact-dark", egui::vec2(1024.0, 768.0), ThemeKind::Dark),
+        ("compact-light", egui::vec2(1024.0, 768.0), ThemeKind::Light),
+    ] {
+        check_size_column(name, size, theme);
+    }
+}
+
+fn check_size_column(name: &str, size: egui::Vec2, theme: effectcraft_ui_egui::theme::ThemeKind) {
+    struct Files(std::path::PathBuf);
+    impl Drop for Files {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let files = Files(std::env::temp_dir().join(format!(
+        "effectcraft-size-ui-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    )));
+    std::fs::create_dir(&files.0).unwrap();
+    let mut s = Session::default();
+    s.prefs.general.language = "en".into();
+    let project = std::sync::Arc::make_mut(&mut s.project);
+    let folder = project.add_item("Folder", Label::Aqua, None, ItemKind::Folder);
+    let mut ids = Vec::new();
+    for (name, bytes) in [("Small", Some(10)), ("Large", Some(20)), ("Unavailable", None), ("Empty", Some(0))] {
+        let path = files.0.join(name);
+        if let Some(bytes) = bytes {
+            std::fs::File::create(&path).unwrap().set_len(bytes).unwrap();
+        }
+        ids.push(project.add_item(name, Label::Aqua, None, ItemKind::Footage(Footage { path: path.to_string_lossy().into_owned(), ..Default::default() })));
+    }
+    let [small, large, unavailable, empty] = ids.as_slice() else { panic!("fixture items") };
+    let (small, large, unavailable, empty) = (*small, *large, *unavailable, *empty);
+    let mut app = EffectcraftApp::new(s);
+    app.ui.start_screen = false;
+    app.ui.project_columns = vec!["size".into()];
+    let mut h = Harness::builder().with_size(size).build_eframe(|_| app);
+    let ctx = h.ctx.clone();
+    h.state_mut().set_theme(&ctx, theme);
+    h.run_steps(3);
+    let size_id = |id: ItemId| format!("project.item.{}.size", id.0);
+    let assert_order = |h: &Harness<'_, EffectcraftApp>, expected: &[ItemId]| {
+        let mut visible = expected.to_vec();
+        visible.sort_by(|a, b| center(h, &format!("project.item.{}", a.0)).y.total_cmp(&center(h, &format!("project.item.{}", b.0)).y));
+        assert_eq!(visible, expected);
+    };
+    let undo = h.state().session.history.undo.len();
+    click(&mut h, "project.sort.size");
+    assert_order(&h, &[folder, unavailable, empty, small, large]);
+    click(&mut h, "project.sort.size");
+    assert_order(&h, &[large, small, empty, unavailable, folder]);
+    assert_eq!(h.state().auto.find(&size_id(empty)).unwrap().label, "File size: 0 bytes");
+    assert!(h.state().auto.find(&size_id(folder)).is_none());
+    let at = center(&h, &size_id(small));
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.run_steps(5);
+    assert!(h.query_by_label("File size: 10 bytes").is_some(), "hover exposes exact bytes when both files display 1 KB");
+    if let Ok(dir) = std::env::var("PROJECT_SIZE_SNAPSHOTS") {
+        h.render().unwrap().save(format!("{dir}/project-size-{name}-hover.png")).unwrap();
+    }
+    click_at(&mut h, at);
+    assert_eq!(h.state().session.state.project_selection, [small]);
+    let at = center(&h, &size_id(unavailable));
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.run_steps(5);
+    assert!(h.query_by_label("File size unavailable").is_some());
+    let has_dash = |shape: &egui::Shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == "—");
+    assert!(h.output().shapes.iter().any(|shape| has_dash(&shape.shape)), "unavailable footage has a visible marker");
+    if let Ok(dir) = std::env::var("PROJECT_SIZE_SNAPSHOTS") {
+        h.render().unwrap().save(format!("{dir}/project-size-{name}-unavailable.png")).unwrap();
+    }
+    std::fs::OpenOptions::new().write(true).open(files.0.join("Small")).unwrap().set_len(30).unwrap();
+    h.run_steps(3);
+    assert_order(&h, &[small, large, empty, unavailable, folder]);
+    assert_eq!(h.state().auto.find(&size_id(small)).unwrap().label, "File size: 30 bytes");
+    assert_eq!(h.state().session.history.undo.len(), undo, "sorting and size details don't edit the project");
+    let from = center(&h, &size_id(small));
+    let to = center(&h, &format!("project.item.{}.name", folder.0));
+    h.input_mut().events.push(Event::PointerMoved(from));
+    h.step();
+    button(&mut h, from, true);
+    h.step();
+    for k in 1..=6 {
+        h.input_mut().events.push(Event::PointerMoved(from + (to - from) * (k as f32 / 6.0)));
+        h.step();
+    }
+    button(&mut h, to, false);
+    h.run_steps(3);
+    assert_eq!(h.state().session.project.item(small).unwrap().parent, Some(folder), "dragging from Size still moves the item");
+    assert_eq!(h.state().session.history.undo.len(), undo + 1);
+    h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.project.item(small).unwrap().parent, None);
+    assert_order(&h, &[small, large, empty, unavailable, folder]);
+}
+
+#[test]
 fn folder_twirl_opens_and_closes_the_folder_on_one_click() {
     let (mut h, folder, comp, _) = harness();
     let twirl = format!("project.item.{}.twirl", folder.0);
