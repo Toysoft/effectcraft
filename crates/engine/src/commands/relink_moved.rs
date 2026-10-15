@@ -306,7 +306,8 @@ mod tests {
         let r = s.execute("footage.relink", json!({"item": a.0, "path": target})).unwrap();
         assert_eq!(r["relinked"], json!([a.0, b.0, m.0]), "{r}");
         assert_eq!(r["stillMissing"], 1);
-        assert_eq!(path_of(&s, m), new.join("audio/m.wav").to_string_lossy());
+        // The stored path and the joined one may mix `/` and `\` on Windows.
+        assert_eq!(path_of(&s, m).replace('\\', "/"), new.join("audio/m.wav").to_string_lossy().replace('\\', "/"));
         assert_eq!(path_of(&s, other), "/elsewhere/c.mov");
         // One undo step brings every path back.
         s.execute("edit.undo", json!({})).unwrap();
