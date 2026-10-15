@@ -264,6 +264,21 @@ fn hostile_structures_return_errors_or_draw_nothing() {
 }
 
 #[test]
+fn inline_image_with_absurd_dimensions_falls_back_to_ei_scan() {
+    // `/W 5000000000000000000` overflows the row math (`* bpc` alone exceeds usize::MAX):
+    // `inline_len` must return `None` (scan for `EI`) instead of overflowing; the oversized
+    // image itself is then refused by size.
+    let bytes = page_pdf(
+        "q 10 0 0 10 0 0 cm BI /W 5000000000000000000 /H 100 /CS /G /BPC 8 ID \0 EI Q",
+        "",
+        vec![],
+    );
+    let doc = parse(&bytes).unwrap();
+    let _ = render(&doc);
+    assert!(!doc.skipped.is_empty());
+}
+
+#[test]
 fn truncated_and_corrupt_eps_never_panic() {
     let eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100\n\
 /sq { newpath 0 0 moveto 10 0 lineto 10 10 lineto closepath } bind def\n\
