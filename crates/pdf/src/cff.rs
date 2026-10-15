@@ -533,6 +533,10 @@ impl Cff {
 
     /// A glyph's outline in glyph space (`font_matrix` maps it to text space) and its advance.
     pub fn outline(&self, gid: u16) -> Option<(BezPath, f64)> {
+        self.outline_depth(gid, 0)
+    }
+
+    fn outline_depth(&self, gid: u16, depth: usize) -> Option<(BezPath, f64)> {
         let r = self.charstrings.get(gid as usize)?.clone();
         let fd = self.fdselect.get(gid as usize).copied().unwrap_or(0) as usize;
         let fd = fd.min(self.lsubrs.len() - 1);
@@ -547,13 +551,17 @@ impl Cff {
             _ => self.widths[fd].0,
         };
         let mut path = st.path;
-        // endchar seac: base and accent glyphs by standard code.
-        if let Some((adx, ady, b, a)) = st.seac {
+        // endchar seac: base and accent glyphs by standard code. The nesting is bounded like the
+        // Type 1 interpreter's: a font whose accented glyphs seac into each other (or into
+        // themselves) must not recurse until the stack overflows.
+        if let Some((adx, ady, b, a)) = st.seac
+            && depth < 2
+        {
             let find = |code: u8| crate::encoding::Base::Standard.name(code).and_then(|n| self.gid_by_name(&n));
-            if let Some((bp, _)) = find(b).and_then(|g| self.outline(g)) {
+            if let Some((bp, _)) = find(b).and_then(|g| self.outline_depth(g, depth + 1)) {
                 path.extend(bp);
             }
-            if let Some((ap, _)) = find(a).and_then(|g| self.outline(g)) {
+            if let Some((ap, _)) = find(a).and_then(|g| self.outline_depth(g, depth + 1)) {
                 path.extend(kurbo::Affine::translate((adx, ady)) * ap);
             }
         }
@@ -1047,5 +1055,31 @@ mod tests {
         assert_eq!(w, 600.0);
         assert!((p.area().abs() - 250_000.0).abs() < 1e-6, "{}", p.area());
         assert_eq!(p.bounding_box(), kurbo::Rect::new(50.0, 0.0, 550.0, 500.0));
+    }
+
+    /// An `endchar` seac whose base and accent name its own glyph used to recurse until the
+    /// stack overflowed and aborted the app; the depth limit cuts it off like the Type 1
+    /// interpreter's.
+    #[test]
+    fn seac_cycles_are_cut_off_not_a_stack_overflow() {
+        let enc = |v: i32| -> Vec<u8> {
+            if (-107..=107).contains(&v) {
+                vec![(v + 139) as u8]
+            } else {
+                let mut o = vec![28];
+                o.extend_from_slice(&(v as i16).to_be_bytes());
+                o
+            }
+        };
+        // `w adx ady bchar achar endchar`: both components are 'A' (standard code 65), this glyph.
+        let mut cs = vec![];
+        for v in [500, 0, 0, 65, 65] {
+            cs.extend(enc(v));
+        }
+        cs.push(14);
+        let font = write_test_cff(&[(".notdef", vec![14]), ("A", cs)]);
+        let cff = Cff::parse(&font).unwrap();
+        let (p, _) = cff.outline(cff.gid_by_name("A").unwrap()).unwrap();
+        assert!(p.elements().is_empty());
     }
 }
