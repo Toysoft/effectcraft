@@ -10,7 +10,7 @@ use effectcraft_time::{FrameRate, Tick};
 use filmcraft_isobmff::{Brand, FourCc, Mp4Writer, PcmConfig, SampleEntry, TrackConfig, WriteSample, WriterOptions};
 use rayon::prelude::*;
 
-use crate::{Cx, ExportError, Report, Result, State, batch_size, wants_audio};
+use crate::{Cx, ExportError, Report, Result, State, dynamic_batch_size, wants_audio};
 
 fn enc(e: impl std::fmt::Display) -> ExportError {
     ExportError::Encode(e.to_string())
@@ -94,6 +94,7 @@ pub(crate) fn rgba_to_yuv420(rgba: &[u8], w: usize, h: usize, y: &mut Vec<u8>, u
     y.resize(w * h, 0);
     u.resize(cw * ch, 0);
     v.resize(cw * ch, 0);
+
     y.par_chunks_mut(w * 2).zip(u.par_chunks_mut(cw).zip(v.par_chunks_mut(cw))).enumerate().for_each(|(cy, (yr, (ur, vr)))| {
         let rows = yr.len() / w;
         let mut acc = vec![(0f32, 0f32, 0f32); cw];
@@ -264,7 +265,7 @@ pub(crate) async fn movie(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut St
         _ => Box::new(ProRes::new(w, h, job.output.prores_profile, if channels == Channels::Alpha { Channels::Rgb } else { channels })),
     };
     let brand = if matches!(fmt, OutputFormat::ProRes | OutputFormat::Uncompressed) { Brand::Mov } else { Brand::Mp4 };
-    let batch = batch_size();
+    let batch = dynamic_batch_size(w, h);
     let render = |_: u64, img: effectcraft_raster::Image| -> Vec<u8> { job.pixels(&img, comp, channels, w, h) };
 
     // Encode the first batch before creating tracks: encoders finalise their config on frame 1.
@@ -358,9 +359,9 @@ pub(crate) async fn movie(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut St
     let mut i = first_end;
     while i < total {
         let end = (i + batch).min(total);
-        let frames: Vec<Vec<u8>> = job.frames(comp, (i..end).collect(), render).await;
-        for (k, px) in frames.iter().enumerate() {
-            let ps = venc.encode(px, i + k as u64)?;
+        let mut frames: Vec<Vec<u8>> = job.frames(comp, (i..end).collect(), render).await;
+        for (k, px) in frames.drain(..).enumerate() {
+            let ps = venc.encode(&px, i + k as u64)?;
             write_video(&mut mux, ps)?;
         }
         write_audio_until(&mut mux, frame_end_time(end), &mut cursor)?;
