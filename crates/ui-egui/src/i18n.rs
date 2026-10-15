@@ -5555,7 +5555,7 @@ const GERMAN: &[(&str, &str, &str)] = &[
     ("layer.settings", "Layer Settings...", "Ebeneneinstellungen..."),
     ("layer.openLayer", "Open Layer", "Ebene öffnen"),
     ("layer.openSource", "Open Layer Source", "Ebenenquelle öffnen"),
-    ("layer.revealInFinder", "Reveal in Finder", "Im Finder einblenden"),
+    ("layer.revealInFinder", "Reveal in Finder", "Im Finder anzeigen"),
     ("", "Mask", "Maske"),
     ("layer.addMask", "New Mask", "Neue Maske"),
     ("layer.mask.shape", "Mask Shape...", "Maskenform..."),
@@ -5602,8 +5602,8 @@ const GERMAN: &[(&str, &str, &str)] = &[
     ("layer.hideOtherVideo", "Hide Other Video", "Anderes Video ausblenden"),
     ("layer.showAllVideo", "Show All Video", "Gesamtes Video einblenden"),
     ("layer.unlockAll", "Unlock All Layers", "Alle Ebenen entsperren"),
-    ("layer.expressions", "Enable Expressions", "Expressions aktivieren"),
-    ("layer.expressions", "Disable Expressions", "Expressions deaktivieren"),
+    ("layer.expressions", "Enable Expressions", "Ausdrücke aktivieren"),
+    ("layer.expressions", "Disable Expressions", "Ausdrücke deaktivieren"),
     ("layer.setSwitch", "Shy", "Schüchtern"),
     ("layer.setSwitch", "Lock", "Sperren"),
     ("layer.setSwitch", "Audio", "Audio"),
@@ -5631,7 +5631,7 @@ const GERMAN: &[(&str, &str, &str)] = &[
     ("layer.autoOrient", "Auto-Orient...", "Automatische Ausrichtung..."),
     ("", "Time", "Zeit"),
     ("layer.enableTimeRemap", "Enable Time Remapping", "Zeitverzerrung aktivieren"),
-    ("layer.timeReverse", "Time-Reverse Layer", "Ebenenreihenfolge umkehren"),
+    ("layer.timeReverse", "Time-Reverse Layer", "Ebene zeitlich umkehren"),
     ("layer.timeStretch", "Time Stretch...", "Zeitdehnung..."),
     ("layer.freezeFrame", "Freeze Frame", "Frame fixieren"),
     ("layer.freezeOnLastFrame", "Freeze On Last Frame", "Bei letztem Frame fixieren"),
@@ -5700,7 +5700,7 @@ const GERMAN: &[(&str, &str, &str)] = &[
     ("layer.trackMatte", "Matte with Layer Below", "Spurmaske mit Ebene darunter"),
     ("", "Layer Styles", "Ebenenstile"),
     ("layer.style.options", "Layer Style Options...", "Ebenenstiloptionen..."),
-    ("layer.style.convertToEditable", "Convert to Editable Styles", "In editierbare Formate umwandeln"),
+    ("layer.style.convertToEditable", "Convert to Editable Styles", "In bearbeitbare Stile umwandeln"),
     ("layer.style.showAll", "Show All", "Alle anzeigen"),
     ("layer.style.removeAll", "Remove All", "Alle entfernen"),
     ("layer.style.dropShadow", "Drop Shadow", "Schlagschatten"),
@@ -6616,6 +6616,18 @@ mod tests {
     use effectcraft_engine::menus::{MenuNode, TREE, parse};
     use serde_json::json;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn german_menu_labels_describe_actions_consistently() {
+        assert_eq!(lookup(GERMAN, "layer.timeReverse", "Time-Reverse Layer"), "Ebene zeitlich umkehren");
+        assert_eq!(lookup(GERMAN, "layer.style.convertToEditable", "Convert to Editable Styles"), "In bearbeitbare Stile umwandeln");
+        assert_eq!(lookup(GERMAN, "layer.expressions", "Enable Expressions"), "Ausdrücke aktivieren");
+        assert_eq!(lookup(GERMAN, "layer.expressions", "Disable Expressions"), "Ausdrücke deaktivieren");
+        assert_eq!(
+            lookup(GERMAN, "file.revealInFinder", "Reveal in Finder"),
+            lookup(GERMAN, "layer.revealInFinder", "Reveal in Finder")
+        );
+    }
 
     #[test]
     fn czech_translates_menus_without_changing_bindings_or_user_names() {
