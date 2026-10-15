@@ -246,7 +246,7 @@ fn accuracy_1080p_single_point() {
 
 /// Wall time is meaningful only without competing tests or builds (see docs/testing.md).
 #[test]
-#[ignore = "isolated performance budget: run with --profile ci --ignored --test-threads=1"]
+#[ignore = "isolated performance budget: run with --release --ignored --test-threads=1"]
 fn performance_1080p_single_point() {
     let per = track_1080p_single_point();
     eprintln!("1080p single-point track: {:.2} ms/frame ({:.0} fps)", per * 1e3, 1.0 / per);
