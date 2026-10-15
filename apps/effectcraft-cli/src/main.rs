@@ -660,11 +660,10 @@ fn render(args: &Args, json_out: bool) -> Result<(), Failure> {
     let mut s = session(args)?;
     if args.opt("--template").is_some() {
         template::prepare(&mut s, args)?;
-    } else {
-        match &args.project {
-            Some(p) => s.execute("file.open", json!({"path": p})).map_err(|e| Failure::Error(e.to_string()))?,
-            None => s.execute("file.openDemoProject", json!({})).map_err(|e| Failure::Error(e.to_string()))?,
-        };
+    } else if let Some(p) = &args.project {
+        s.execute("file.open", json!({"path": p})).map_err(|e| Failure::Error(e.to_string()))?;
+    } else if args.flag("--demo") || !args.flag("--empty") {
+        s.execute("file.openDemoProject", json!({})).map_err(|e| Failure::Error(e.to_string()))?;
     }
     let err = |e: effectcraft_engine::EngineError| Failure::Error(e.to_string());
     if !args.flag("--queue") {
