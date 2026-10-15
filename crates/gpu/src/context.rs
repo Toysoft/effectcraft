@@ -37,8 +37,15 @@ const EXT_ENTRIES: &[&str] = &["classic3d"];
 /// 8/16 bpc are emulated by clamping and quantising, as on the CPU).
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
-/// Uploaded layer buffers kept on the GPU by default (bytes; [`GpuContext::set_upload_budget`]).
+/// Uploaded layer buffers kept on the GPU by default (bytes; [`GpuContext::set_upload_budget`],
+/// overridable through `EFFECTCRAFT_GPU_UPLOAD_BUDGET_MB`).
 const UPLOAD_BUDGET: usize = 1536 << 20;
+
+/// `EFFECTCRAFT_GPU_UPLOAD_BUDGET_MB`'s value in megabytes, if it is a positive integer.
+fn parse_upload_budget_mb(v: &str) -> Option<usize> {
+    let v = v.trim();
+    v.parse::<usize>().ok().filter(|mb| *mb > 0)
+}
 
 /// Working textures kept for reuse once their last image is dropped (bytes).
 const POOL_BUDGET: usize = 768 << 20;
@@ -634,7 +641,7 @@ impl GpuContext {
             init_resource(&device, "dummy storage buffer", || buffer_init(&device, &queue, Some("dummy"), &[0u8; 16], wgpu::BufferUsages::STORAGE))?;
         let dummy_tex = init_resource(&device, "dummy texture view", || dummy.create_view(&Default::default()))?;
         let max_dim = device.limits().max_texture_dimension_2d;
-        Ok(GpuContext {
+        let ctx = GpuContext {
             device,
             queue,
             name,
@@ -661,7 +668,13 @@ impl GpuContext {
             particle_states: Default::default(),
             deferred: None,
             readbacks,
-        })
+        };
+        // An embedder sizes the upload cache through the environment (the same channel the
+        // face landmarkers use); unset keeps the default.
+        if let Some(mb) = std::env::var("EFFECTCRAFT_GPU_UPLOAD_BUDGET_MB").ok().and_then(|v| parse_upload_budget_mb(&v)) {
+            ctx.set_upload_budget(mb.saturating_mul(1 << 20));
+        }
+        Ok(ctx)
     }
 
     /// Whether this context has observed a readback timeout or device failure.
@@ -1394,4 +1407,19 @@ impl<'g> Enc<'g> {
 /// Mip levels of a full chain for a `w × h` texture (down to 1 × 1).
 pub(crate) fn mip_levels(w: u32, h: u32) -> u32 {
     u32::BITS - w.max(h).max(1).leading_zeros()
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::parse_upload_budget_mb;
+
+    #[test]
+    fn upload_budget_env_parses_only_positive_integers() {
+        for v in ["1024", " 512 ", "2048"] {
+            assert_eq!(parse_upload_budget_mb(v).map(|mb| mb << 20), Some(v.trim().parse::<usize>().unwrap() << 20));
+        }
+        for v in ["", "0", "-8", "64.5", "512mb", "x".repeat(64).as_str()] {
+            assert_eq!(parse_upload_budget_mb(v), None, "{v:?}");
+        }
+    }
 }

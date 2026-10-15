@@ -940,8 +940,9 @@ fn adjustment_footprint_key_ignores_the_effect_stack() {
     assert_eq!(key(&p, 1.0), key(&p, 1.5), "a per-frame effect on the adjustment re-keyed its footprint");
     assert_eq!(key(&p, 1.0), key(&p, 3.5), "the footprint key followed the clock past the mask");
     assert_eq!(foot(&p, 1.0), foot(&p, 3.5));
+    let before = key(&p, 0.0);
     p.comp_mut(cid).unwrap().layers[0].props.prop_mut("effects/#1/amount").unwrap().value = Value::Scalar(90.0);
-    assert_eq!(key(&p, 0.0), key(&p, 0.0), "editing an effect parameter must not re-key the footprint");
+    assert_eq!(before, key(&p, 0.0), "editing an effect parameter must not re-key the footprint");
 }
 
 #[test]
