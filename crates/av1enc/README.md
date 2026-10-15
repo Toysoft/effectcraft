@@ -65,8 +65,10 @@ reconstruction, so prediction never drifts.
 - **Speed**: superblock rows are decided in parallel (rayon) as a wavefront, each row two
   superblocks behind the row above, since a decision reads only the last reconstructed row and
   motion vectors of the row above up to the superblock above-right. The output is bit-identical
-  to the serial order whatever the thread count (`tests/roundtrip.rs` pins the bitstream bytes).
-  Tiles are written in parallel. The loop filter runs its vertical-edge pass on superblock
+  to serial decision order for the same tile layout, regardless of thread count
+  (`tests/roundtrip.rs` pins the bitstream bytes). Changing the automatic tile layout can change
+  the bitstream: 1080p uses one column, while 3840×2160 uses two. The split follows superblock
+  width, so “below 4K” is not a compatibility boundary. Tiles are written in parallel. The loop filter runs its vertical-edge pass on superblock
   rows and its horizontal-edge pass on superblock columns in parallel (an edge only changes
   samples in its own row or column of 4x4 units, so the result equals the raster order), for
   the level search too. Transform trials and block decisions reuse scratch buffers.
