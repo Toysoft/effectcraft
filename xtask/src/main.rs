@@ -9,12 +9,14 @@
 //! - `assets`: every asset file (image, icon, font, LUT, audio, video…) has a complete
 //!   `<file>.attribution` sidecar and an entry in `ATTRIBUTION.md` (AGENTS.md §1).
 //! - `ico <out.ico> <in.png>…`: pack PNGs into a Windows `.ico` (used by `packaging/icons.sh`).
-//! - `ci`: fmt check, clippy -D warnings, tests, layers, assets, wasm.
+//! - `native-fonts`: exact native host-font integration test (macOS/Linux).
+//! - `ci`: fmt check, clippy -D warnings, tests, native host fonts, layers, assets, wasm.
 //! - `bench [--bin CLI] [--quick] [--compare OLD.jsonl] …`: render benchmark of generated scenarios
 //!   (memory, CPU, wall time) into `target/bench/results.jsonl` (`bench.rs`, docs/testing.md).
 
 mod bench;
 mod ico;
+mod native_fonts;
 mod version;
 
 use std::process::{Command, ExitCode};
@@ -410,6 +412,9 @@ fn ci() -> Result<(), String> {
     run(Command::new(cargo).args(["fmt", "--check"]))?;
     run(Command::new(cargo).args(["clippy", "--workspace", "--all-targets", "--release", "--", "-D", "warnings"]))?;
     run(Command::new(cargo).args(["test", "--workspace", "--release"]))?;
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
+        native_fonts::run()?;
+    }
     layers()?;
     assets()?;
     wasm()
@@ -422,6 +427,7 @@ fn main() -> ExitCode {
         "wasm" => wasm(),
         "assets" => assets(),
         "ci" => ci(),
+        "native-fonts" => native_fonts::run(),
         "web" => web(&std::env::args().skip(2).collect::<Vec<_>>()),
         "bench" => bench::run(&root(), &std::env::args().skip(2).collect::<Vec<_>>()),
         "ico" => {
@@ -432,7 +438,7 @@ fn main() -> ExitCode {
             let rest: Vec<String> = std::env::args().skip(2).collect();
             version::run(&root(), &rest.iter().map(String::as_str).collect::<Vec<_>>())
         }
-        _ => Err("usage: cargo xtask <layers|assets|wasm|web [--dev] [--serve PORT]|ico OUT.ico IN.png…|version [set X.Y.Z]|ci|bench [--bin CLI] [--quick] [--project F --comp C] [--compare OLD.jsonl] (--help)>".into()),
+        _ => Err("usage: cargo xtask <native-fonts|layers|assets|wasm|web [--dev] [--serve PORT]|ico OUT.ico IN.png…|version [set X.Y.Z]|ci|bench [--bin CLI] [--quick] [--project F --comp C] [--compare OLD.jsonl] (--help)>".into()),
     };
     match r {
         Ok(()) => ExitCode::SUCCESS,

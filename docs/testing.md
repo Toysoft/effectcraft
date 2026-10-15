@@ -2,7 +2,8 @@
 
 ```sh
 cargo test --workspace     # everything
-cargo xtask ci             # fmt, clippy -D warnings, tests, layers, assets, wasm
+cargo xtask ci             # fmt, clippy, portable and native tests, layers, assets, wasm
+cargo xtask native-fonts   # installed-font integration on macOS/Linux
 ```
 
 ## What the tests cover
@@ -70,3 +71,18 @@ date, load average, scenario, settings, metrics); `--compare OLD.jsonl` prints t
 the latest matching runs there, `--compare OLD --with NEW` compares two files without rendering.
 The table notes the 1-minute load average: on a busy machine wall time is noise, so compare
 peak memory and instructions retired, and rerun when the load differs a lot.
+
+## Portable and native font discovery
+
+`directory_fonts_are_discovered_without_loading_the_face` uses an existing licensed Inter
+font in a temporary directory. It checks real DirectorySource discovery, file-backed metadata,
+lazy loading and a real glyph without changing the global font database or requiring host fonts.
+Ordinary tests retain the process-wide scan-once assertion.
+
+`fonts::tests::native_system_font_scan` retains the native macOS face-count, Helvetica Bold
+resolution and layout assertions. On Linux hosts with `/etc/fonts`, it requires discovered system
+faces, preserving the coverage requested in #1298. This test is ignored during portable test runs.
+`cargo xtask native-fonts` checks that exactly one native test is discoverable, then runs it;
+`cargo xtask ci` invokes that gate on macOS and Linux. Native CI hosts must provide installed
+fonts. Package sandboxes can run portable tests separately but must not describe those alone as
+native discovery validation. No rescan UI or font-registration policy is changed here.

@@ -935,14 +935,62 @@ mod tests {
         assert!(r.missing);
     }
 
-    /// Native: the system scan reads name tables only and resolves families installed there.
+    #[test]
+    fn directory_fonts_are_discovered_without_loading_the_face() {
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture = (0..128)
+            .find_map(|attempt| {
+                let path = std::env::temp_dir().join(format!("effectcraft-directory-font-{}-{attempt}", std::process::id()));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => Some(Fixture(path)),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                    Err(error) => panic!("cannot create font fixture: {error}"),
+                }
+            })
+            .expect("cannot allocate a fresh font fixture directory");
+        let file = fixture.0.join("Inter Bold.ttf");
+        std::fs::write(&file, INTER_BOLD).unwrap();
+        let source = DirectorySource { dirs: vec![fixture.0.clone()] };
+        let mut infos = source.faces();
+        assert_eq!(infos.len(), 1);
+        let info = infos.remove(0);
+        assert_eq!((&*info.family, &*info.style, info.weight, info.italic, info.index, info.origin), ("Inter", "Bold", 700, false, 0, "system"));
+        assert!(matches!(&info.data, FaceData::File(path) if path == &file));
+        // A private database avoids the process-wide scan and already registered bundled faces.
+        let mut local = Db { faces: Vec::new(), scanned: false };
+        push(&mut local, info);
+        let discovered = &local.faces[0];
+        assert!(discovered.bytes.get().is_none(), "discovery must not load face bytes");
+        assert!(discovered.font().is_some());
+        assert!(discovered.glyph('A').is_some());
+        assert!(discovered.bytes.get().is_some(), "the first use loads the file");
+    }
+
     #[test]
     fn system_scan_finds_fonts() {
+        scan_system(); // Another test may already have triggered the process-wide scan.
+        assert_eq!(scan_system(), 0, "scans once");
+    }
+
+    /// Host integration, invoked explicitly by `cargo xtask native-fonts` and native CI.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    #[ignore = "requires installed native fonts; run cargo xtask native-fonts"]
+    fn native_system_font_scan() {
         let t = std::time::Instant::now();
-        scan_system(); // (another test may have triggered the scan already)
+        scan_system();
         let n = all_faces().iter().filter(|f| f.info.origin == "system").count();
         eprintln!("system fonts: {n} faces in {:?}", t.elapsed());
         assert_eq!(scan_system(), 0, "scans once");
+        // A native Linux host with Fontconfig must expose installed system faces.
+        if cfg!(target_os = "linux") && std::path::Path::new("/etc/fonts").is_dir() {
+            assert!(n > 0, "fontconfig host has no discovered system faces");
+        }
         if cfg!(target_os = "macos") {
             assert!(n > 20, "{n}");
             let r = resolve("Helvetica", "Bold");
