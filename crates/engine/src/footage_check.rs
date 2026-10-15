@@ -269,7 +269,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(paths.contains(&d.join("Job/shots/a.png").to_string_lossy().to_string()), "{paths:?}");
+        // `Path` equality compares components, so `/` and `\` spell the same file on Windows.
+        let want = d.join("Job/shots/a.png");
+        assert!(paths.iter().any(|p| std::path::Path::new(p) == want), "{paths:?}");
         assert!(!o.is_dirty(), "finding the files is not an edit");
         let _ = std::fs::remove_dir_all(d);
     }
