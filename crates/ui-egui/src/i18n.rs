@@ -9,8 +9,8 @@ use std::sync::OnceLock;
 /// Effect names, keyed by effect id (#821).
 pub(crate) mod effects;
 /// Translations for the panels, tooltips and dialogs below the menu bar (see the module docs).
-mod bidi;
-mod ui;
+pub(crate) mod bidi;
+pub(crate) mod ui;
 use effectcraft_engine::menus::{MenuEntry, MenuNode};
 pub(crate) use ui::{set_current, tr, tr_args};
 
