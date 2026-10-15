@@ -629,6 +629,42 @@ fn atomic_write_survives_a_crash_mid_write() {
     let _ = std::fs::remove_dir_all(d);
 }
 
+/// A writer that is paused mid-temporary while another writer fully publishes to the same
+/// destination must not let either one publish a mixture: the bounded, exclusively-created
+/// temporaries keep the two writes apart (#1233). Unlike
+/// `concurrent_atomic_writes_each_publish_a_whole_file`, this pins the interleaving
+/// deterministically instead of sampling it under real contention.
+#[test]
+fn atomic_writes_in_parallel_never_publish_a_mixture() {
+    use std::sync::{Arc, Barrier};
+    let d = tmp("atomic-race");
+    let f = d.join("p.ecproj");
+    let a = vec![b'A'; 64];
+    let b = vec![b'B'; 64];
+    // Writer A writes the first half of its temporary, then waits while writer B fully publishes
+    // against the same destination, and only then finishes.
+    let (half, published) = (Arc::new(Barrier::new(2)), Arc::new(Barrier::new(2)));
+    let (f2, a2) = (f.clone(), a.clone());
+    let (half2, published2) = (half.clone(), published.clone());
+    let t = std::thread::spawn(move || {
+        atomic_write_with(&f2, &a2, |fh, data| {
+            use std::io::Write;
+            fh.write_all(&data[..32])?;
+            half2.wait();
+            published2.wait();
+            fh.write_all(&data[32..])?;
+            fh.sync_all()
+        })
+    });
+    half.wait();
+    atomic_write(&f, &b).unwrap();
+    published.wait();
+    assert!(t.join().unwrap().is_ok(), "the paused writer still publishes");
+    let got = std::fs::read(&f).unwrap();
+    assert!(got == a || got == b, "the destination holds one complete write, never a mixture: {}", String::from_utf8_lossy(&got));
+    let _ = std::fs::remove_dir_all(d);
+}
+
 #[test]
 fn autosave_rotates_through_max_versions() {
     let d = tmp("rotate");
