@@ -264,6 +264,31 @@ fn hostile_structures_return_errors_or_draw_nothing() {
 }
 
 #[test]
+fn smask_with_absurd_bpc_is_ignored_not_fatal() {
+    // `/BitsPerComponent 32` in a soft mask: `1u32 << bpc` must neither panic (debug)
+    // nor mistranslate samples into alpha (release); the mask is treated as absent.
+    let bytes = page_pdf(
+        "q 2 0 0 2 0 0 cm /Im Do Q",
+        "/XObject << /Im 10 0 R >>",
+        vec![
+            (
+                10,
+                "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 11 0 R >>".into(),
+                Some(vec![0x80; 4]),
+            ),
+            (
+                11,
+                "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 32 >>".into(),
+                Some(vec![0xFF; 16]),
+            ),
+        ],
+    );
+    let doc = parse(&bytes).unwrap();
+    let img = render(&doc);
+    assert!(coverage(&img, 0, 0, 200, 100) > 0.0, "image still draws, opaque");
+}
+
+#[test]
 fn truncated_and_corrupt_eps_never_panic() {
     let eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100\n\
 /sq { newpath 0 0 moveto 10 0 lineto 10 10 lineto closepath } bind def\n\
