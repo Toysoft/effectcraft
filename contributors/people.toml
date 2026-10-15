@@ -78,3 +78,9 @@ sync_github_name = true
 [people.moecr7]
 real_name = "Moein Saharkhiz"
 display_name = "onlymoein"
+
+# Name supplied by this contributor for the About window.
+[people.lia-xim]
+real_name = "Matthias Ramahi"
+display_name = "Matthias Ramahi"
+sync_github_name = false
