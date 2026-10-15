@@ -706,6 +706,21 @@ fn sequence_layers() {
     assert_eq!(layer(&s, c).props.prop("transform/opacity").unwrap().keys.len(), 2);
 }
 
+/// File ▸ Dependencies ▸ Find Missing Fonts lists a text layer only when no face matches its
+/// font by family, PostScript or full name.
+#[test]
+fn fonts_named_by_their_postscript_or_full_name_are_not_missing() {
+    let mut s = comp();
+    // The first three name bundled faces by family, PostScript and full name; no face has the fourth.
+    let fonts = ["Noto Serif", "Inter-Bold", "Inter SemiBold", "No Such Font Family 123"];
+    let ids: Vec<u64> = fonts.iter().map(|f| s.execute("layer.newText", json!({"text": "Aa", "font": f})).unwrap()["layer"].as_u64().unwrap()).collect();
+    let r = s.execute("file.findMissing", json!({"what": "fonts"})).unwrap();
+    let listed: Vec<(u64, &str)> = r["fonts"].as_array().unwrap().iter().map(|f| (f["layer"].as_u64().unwrap(), f["font"].as_str().unwrap())).collect();
+    assert_eq!(listed, [(ids[3], fonts[3])], "{r}");
+    let f = s.execute("text.fontFeatures", json!({"layer": ids[1]})).unwrap();
+    assert_eq!((&f["family"], &f["style"], &f["missing"]), (&json!("Inter"), &json!("Bold"), &json!(false)), "{f}");
+}
+
 #[test]
 fn file_menu_project_ops() {
     let mut s = comp();
