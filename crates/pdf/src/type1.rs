@@ -143,8 +143,11 @@ impl Type1 {
                 q += 1;
             }
             q += 1;
-            let bytes = priv_.get(q..q + n)?;
-            Some((cs(bytes), q + n))
+            // `n` is attacker-controlled (`usize::MAX` parses fine): add checked so a
+            // gigantic `RD` length is refused instead of overflowing.
+            let end = q.checked_add(n)?;
+            let bytes = priv_.get(q..end)?;
+            Some((cs(bytes), end))
         };
         if let Some(p) = find(&priv_, b"/Subrs", 0) {
             let mut q = p + 6;
@@ -531,5 +534,23 @@ mod tests {
         assert_eq!(w, 600.0);
         assert!((p.area().abs() - 250_000.0).abs() < 1e-6);
         assert_eq!(p.bounding_box(), kurbo::Rect::new(50.0, 0.0, 550.0, 500.0));
+    }
+
+    #[test]
+    fn absurd_rd_length_does_not_panic() {
+        // A `CharStrings` entry claiming `usize::MAX` bytes: `q + n` must be refused
+        // (parsed as `None`), not overflow. Release builds already survived via `.get()`;
+        // this pins the debug/test/fuzz behavior too.
+        let mut priv_ = b"dup /Private 8 dict dup begin /RD{string currentfile exch readstring pop}executeonly def\n/lenIV 4 def\n/Subrs 0 array\nND\n2 index /CharStrings 1 dict dup begin\n"
+            .to_vec();
+        priv_.extend_from_slice(b"/box 18446744073709551615 RD ");
+        priv_.extend_from_slice(&[0u8; 8]);
+        priv_.extend_from_slice(b" ND\nend\nend\nmark currentfile closefile\n");
+        let mut out =
+            b"%!PS-AdobeFont-1.0: Test 001\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/Encoding 256 array\nreadonly def\ncurrentfile eexec\n"
+                .to_vec();
+        out.extend(encrypt(&priv_, EEXEC_R, 4));
+        out.extend_from_slice(b"\n0000000000000000\ncleartomark\n");
+        assert!(Type1::parse(&out).is_none(), "unreadable CharStrings are refused");
     }
 }
