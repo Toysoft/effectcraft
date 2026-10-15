@@ -187,6 +187,18 @@ fn errors_inside_a_function_wrapper_report_the_failing_line() {
     assert_eq!(e.line, Some(3), "{e:?}");
 }
 
+/// The first use of an undefined name is the one inside the function that reads it: a mention
+/// before it, in a comment, a string or another function, doesn't move the report (#1161).
+#[test]
+fn an_undefined_name_mentioned_earlier_reports_its_use_in_the_reading_function() {
+    let mut s = session();
+    let code = "// nope is mentioned here\nvar text = 'nope';\nfunction other() { return nope; }\n(function () {\n  var a = 1;\n  nope.call();\n})();\n";
+    let o = run_code(&mut s, code, "earlier.jsx");
+    let e = o.error.expect("reference error");
+    assert!(e.message.contains("nope"), "{e:?}");
+    assert_eq!(e.line, Some(6), "{e:?}");
+}
+
 #[test]
 fn match_names_and_lookups() {
     let mut s = session();
