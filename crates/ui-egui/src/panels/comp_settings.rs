@@ -215,7 +215,7 @@ pub fn choose_name(
     let mut save = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let b = ui.add_enabled(ok, egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(t.accent));
+        let b = ui.add_enabled(ok, egui::Button::new(egui::RichText::new(tr("   OK   ")).color(t.on_accent())).fill(t.accent));
         auto.add("dialog.comp.presetNameSave", b.rect, "OK");
         save |= b.clicked();
         let c = ui.button(tr("Cancel"));
@@ -460,7 +460,7 @@ pub fn show(
     ui.add_space(14.0);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let r = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(t.accent));
+            let r = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(t.on_accent())).fill(t.accent));
             auto.add("dialog.comp.ok", r.rect, "OK");
             if r.clicked() {
                 out = Some(params(d));

@@ -218,7 +218,7 @@ pub(crate) fn rulers(app: &mut EffectcraftApp, ui: &mut egui::Ui, map: &ViewerMa
     if let Some(hp) = ui.ctx().pointer_hover_pos()
         && inner.contains(hp)
     {
-        let m = Stroke::new(1.0, t.accent);
+        let m = Stroke::new(1.0, t.editing_accent());
         pt.line_segment([pos2(hp.x, top.min.y), pos2(hp.x, top.max.y)], m);
         pl.line_segment([pos2(left.min.x, hp.y), pos2(left.max.x, hp.y)], m);
     }
@@ -233,8 +233,8 @@ pub(crate) fn rulers(app: &mut EffectcraftApp, ui: &mut egui::Ui, map: &ViewerMa
     if cr.dragged()
         && let Some(hp) = cr.interact_pointer_pos()
     {
-        fg.line_segment([pos2(inner.min.x, hp.y), pos2(inner.max.x, hp.y)], Stroke::new(1.0, t.accent));
-        fg.line_segment([pos2(hp.x, inner.min.y), pos2(hp.x, inner.max.y)], Stroke::new(1.0, t.accent));
+        fg.line_segment([pos2(inner.min.x, hp.y), pos2(inner.max.x, hp.y)], Stroke::new(1.0, t.editing_accent()));
+        fg.line_segment([pos2(hp.x, inner.min.y), pos2(hp.x, inner.max.y)], Stroke::new(1.0, t.editing_accent()));
     }
     if cr.drag_stopped()
         && let Some(hp) = cr.interact_pointer_pos()

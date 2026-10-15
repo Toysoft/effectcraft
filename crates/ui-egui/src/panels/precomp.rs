@@ -149,7 +149,7 @@ pub fn dialog(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         app.auto.add("dialog.precompose.open", r.rect, "Open New Composition");
         ui.add_space(14.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let r = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(t.accent));
+            let r = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(t.on_accent())).fill(t.accent));
             app.auto.add("dialog.precompose.ok", r.rect, "OK");
             ok = r.clicked();
             let r = ui.button(tr("Cancel"));

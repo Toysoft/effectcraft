@@ -5,7 +5,7 @@
 use crate::i18n::tr;
 use effectcraft_engine::project::{AutoOrient, LayerSource, LightKind};
 use effectcraft_engine::render::three_d::camera::{PRESETS, angle_of_view, default_aperture, focal_for_zoom, zoom_for_focal};
-use egui::{Color32, vec2};
+use egui::vec2;
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;
@@ -145,7 +145,7 @@ pub fn open_light(app: &mut EffectcraftApp, layer: Option<u64>) -> Result<(), St
 fn buttons(ui: &mut egui::Ui, t: &Tokens, ok: &mut bool, close: &mut bool) -> (egui::Rect, egui::Rect) {
     let mut r = (egui::Rect::NOTHING, egui::Rect::NOTHING);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let b = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(t.accent));
+        let b = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(t.on_accent())).fill(t.accent));
         r.0 = b.rect;
         if b.clicked() {
             *ok = true;

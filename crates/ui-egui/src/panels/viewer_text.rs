@@ -272,7 +272,7 @@ pub fn hook(
             let b = map.to_screen(end);
             let is_box = a.distance(b) > 6.0;
             if is_box && down {
-                painter.rect_stroke(Rect::from_two_pos(a, b), 0.0, Stroke::new(1.0, app.tokens.accent), StrokeKind::Middle);
+                painter.rect_stroke(Rect::from_two_pos(a, b), 0.0, Stroke::new(1.0, app.tokens.editing_accent()), StrokeKind::Middle);
             }
             if released {
                 let mut p = json!({"text": "", "edit": true, "size": 72, "fill": [1.0, 1.0, 1.0], "vertical": vertical});
@@ -531,7 +531,7 @@ fn draw(app: &mut EffectcraftApp, ui: &mut egui::Ui, painter: &egui::Painter, ma
     if !sel.is_empty() {
         for q in e.lay.selection_quads(sel.start, sel.end) {
             let pts: Vec<Pos2> = q.iter().map(|p| to_s(*p)).collect();
-            painter.add(egui::Shape::convex_polygon(pts, t.accent.gamma_multiply(0.38), Stroke::NONE));
+            painter.add(egui::Shape::convex_polygon(pts, t.editing_accent().gamma_multiply(0.38), Stroke::NONE));
         }
     }
     // Caret (blinking) and IME composition.

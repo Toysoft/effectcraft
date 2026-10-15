@@ -476,7 +476,7 @@ fn ok_cancel(ui: &mut egui::Ui, app: &mut EffectcraftApp, t: &Tokens, prefix: &s
     let (mut ok, mut cancel) = (false, false);
     ui.add_space(14.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("   OK   ")).color(Color32::WHITE)).fill(t.accent));
+        let r = ui.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("   OK   ")).color(t.on_accent())).fill(t.accent));
         app.auto.add(&format!("{prefix}.ok"), r.rect, "OK");
         ok = r.clicked();
         let r = ui.button(crate::i18n::tr("Cancel"));

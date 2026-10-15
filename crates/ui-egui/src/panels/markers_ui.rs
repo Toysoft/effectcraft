@@ -212,7 +212,7 @@ pub fn dialog(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
             app.auto.add("dialog.marker.delete", r.rect, "Delete");
             delete = r.clicked();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let r = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(app.tokens.accent));
+                let r = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(app.tokens.on_accent())).fill(app.tokens.accent));
                 app.auto.add("dialog.marker.ok", r.rect, "OK");
                 ok = r.clicked();
                 let r = ui.button(tr("Cancel"));

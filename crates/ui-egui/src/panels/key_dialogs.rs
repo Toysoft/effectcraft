@@ -2,7 +2,7 @@
 //! pre-filled from the engine (`keys.info`, the layer) and commits through one engine command.
 
 use crate::i18n::tr;
-use egui::{Color32, vec2};
+use egui::vec2;
 use serde_json::{Value, json};
 
 use crate::theme::Tokens;
@@ -115,7 +115,7 @@ fn buttons(ui: &mut egui::Ui, app: &mut EffectcraftApp, t: &Tokens, prefix: &str
     let (mut ok, mut cancel) = (false, false);
     ui.add_space(14.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let r = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(t.accent));
+        let r = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(t.on_accent())).fill(t.accent));
         app.auto.add(&format!("{prefix}.ok"), r.rect, "OK");
         ok = r.clicked();
         let r = ui.button(tr("Cancel"));

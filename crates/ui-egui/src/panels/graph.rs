@@ -524,8 +524,8 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
         && let (Some(o), Some(cur)) = (ctx.input(|i| i.pointer.press_origin()), bg.interact_pointer_pos())
     {
         let br = Rect::from_two_pos(o, cur);
-        pc.rect_filled(br, 0.0, t.accent.gamma_multiply(0.12));
-        pc.rect_stroke(br, 0.0, Stroke::new(1.0, t.accent), StrokeKind::Middle);
+        pc.rect_filled(br, 0.0, t.editing_accent().gamma_multiply(0.12));
+        pc.rect_stroke(br, 0.0, Stroke::new(1.0, t.editing_accent()), StrokeKind::Middle);
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("graph-box"), br));
     }
     if bg.drag_stopped()

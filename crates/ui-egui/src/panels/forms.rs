@@ -5,7 +5,7 @@
 //! dialog does an agent can do with one `engine.execute`.
 
 use crate::i18n::{tr, tr_args};
-use egui::{Color32, vec2};
+use egui::vec2;
 use serde_json::{Map, Value, json};
 
 use crate::theme::Tokens;
@@ -864,7 +864,7 @@ pub fn show_form(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         });
         ui.add_space(14.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let b = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(t.accent));
+            let b = ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(t.on_accent())).fill(t.accent));
             regs.push(("form.ok".into(), b.rect, "OK".into()));
             if b.clicked() {
                 ok = true;
@@ -930,7 +930,7 @@ pub fn show_info(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         ui.label(tr(&body));
         ui.add_space(16.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(t.accent)).clicked() {
+            if ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(t.on_accent())).fill(t.accent)).clicked() {
                 close = true;
             }
         });
@@ -953,7 +953,7 @@ pub fn show_view_options(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Toke
         ui.checkbox(&mut v.transparency_grid, tr("Transparency grid"));
         ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(Color32::WHITE)).fill(t.accent)).clicked() {
+            if ui.add(egui::Button::new(egui::RichText::new(tr("   OK   ")).color(t.on_accent())).fill(t.accent)).clicked() {
                 close = true;
             }
         });
