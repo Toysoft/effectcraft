@@ -413,27 +413,11 @@ pub(crate) fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, p: &egui::Painte
                 let hr = Rect::from_center_size(hp, vec2(10.0, 10.0));
                 let hresp = ui.interact(hr, egui::Id::new(("ghandle", uid, d, k.idx, side)), Sense::drag());
                 app.auto.add(&format!("timeline.graph.handle.{uid}.{d}.{}.{side}", k.idx), hr, "Bezier handle");
-                // The same side's handles of every selected key move with it, by as much as the
-                // pointer moved (After Effects), in one undo step.
+                // The same side's handles of the other selected keys on this curve move with it, by
+                // as much as the pointer moved, in one undo step. Other curves (other properties or
+                // dimensions) are never touched, even when their keys are selected too (#1053).
                 if hresp.drag_started() {
-                    let grabs: Vec<HandleGrab> = cs
-                        .iter()
-                        .flat_map(|c2| {
-                            c2.keys.iter().flat_map(move |k2| {
-                                k2.handles.iter().filter(|h2| h2.out == h.out).map(move |h2| HandleGrab {
-                                    layer: c2.layer.id,
-                                    prop: c2.prop.uid,
-                                    dim: c2.editable.then_some(c2.dim),
-                                    time: k2.time,
-                                    out: h2.out,
-                                    key: (k2.t, k2.v),
-                                    end: (h2.t, h2.v),
-                                    negative: h2.speed < 0.0,
-                                    dur: h2.dur,
-                                })
-                            })
-                        })
-                        .collect();
+                    let grabs = grabs_on_curve(c, h.out);
                     let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(hp);
                     ctx.data_mut(|dd| dd.insert_temp::<HandleDrag>(handle_drag_id(), (press, grabs)));
                 }
@@ -763,6 +747,31 @@ impl HandleGrab {
     }
 }
 
+/// The handles a drag of one `out`/in handle of curve `c` moves: that side's handles of every
+/// selected key on this same curve. Keys of other curves (another property, or another dimension of
+/// the same property, whose keys are selected together with this one) stay put (#1053).
+fn grabs_on_curve(c: &Curve, out: bool) -> Vec<HandleGrab> {
+    curve_grabs(c.layer.id, c.prop.uid, c.dim, c.editable, &c.keys, out)
+}
+
+fn curve_grabs(layer: LayerId, prop: u64, dim: usize, editable: bool, keys: &[KeyPt], out: bool) -> Vec<HandleGrab> {
+    keys.iter()
+        .flat_map(|k| {
+            k.handles.iter().filter(move |h| h.out == out).map(move |h| HandleGrab {
+                layer,
+                prop,
+                dim: editable.then_some(dim),
+                time: k.time,
+                out: h.out,
+                key: (k.t, k.v),
+                end: (h.t, h.v),
+                negative: h.speed < 0.0,
+                dur: h.dur,
+            })
+        })
+        .collect()
+}
+
 /// A handle drag: where the button went down, and the handles that move.
 type HandleDrag = (Pos2, Vec<HandleGrab>);
 
@@ -777,7 +786,31 @@ fn shift_axes(shift: bool, dx: f32, dy: f32) -> (bool, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::shift_axes;
+    use super::{Handle, KeyPt, curve_grabs, shift_axes};
+    use effectcraft_engine::project::LayerId;
+    use effectcraft_engine::time::Tick;
+
+    fn key(i: usize, t: f64, handles: Vec<Handle>) -> KeyPt {
+        KeyPt { idx: i, time: Tick::from_seconds_f64(t), t, v: 0.0, sel: true, handles }
+    }
+
+    fn handle(out: bool, t: f64) -> Handle {
+        Handle { out, t, v: 1.0, speed: 1.0, dur: 1.0 }
+    }
+
+    /// #1053: a handle drag moves the same side's handles of the selected keys on its own curve only.
+    #[test]
+    fn handle_drag_moves_only_own_curve_same_side() {
+        let keys = vec![key(0, 0.0, vec![handle(true, 0.3)]), key(1, 1.0, vec![handle(false, 0.7), handle(true, 1.3)]), key(2, 2.0, vec![handle(false, 1.7)])];
+        let outs = curve_grabs(LayerId(1), 7, 1, true, &keys, true);
+        assert_eq!(outs.len(), 2);
+        assert!(outs.iter().all(|g| g.out && g.prop == 7 && g.dim == Some(1) && g.layer == LayerId(1)));
+        let ins = curve_grabs(LayerId(1), 7, 1, true, &keys, false);
+        assert_eq!(ins.len(), 2);
+        assert!(ins.iter().all(|g| !g.out));
+        // A spatial (single-curve) property carries no dimension.
+        assert_eq!(curve_grabs(LayerId(1), 7, 0, false, &keys, true)[0].dim, None);
+    }
 
     #[test]
     fn shift_locks_drag_to_dominant_axis() {
