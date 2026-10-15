@@ -95,6 +95,8 @@ mod tests_ease_presets;
 #[cfg(test)]
 mod tests_include;
 #[cfg(test)]
+mod tests_key_methods;
+#[cfg(test)]
 mod tests_panels;
 #[cfg(test)]
 mod tests_tasks;

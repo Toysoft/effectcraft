@@ -158,26 +158,38 @@ pub(crate) fn exec(s: &mut Session, id: &str, params: J) -> Result<J, String> {
     }
     let r = s.execute_for_script(id, params);
     if let Some(c) = target
-        && prev != Some(c)
-        && s.state.active_comp == Some(c)
         && id != "comp.open"
     {
-        match prev {
-            Some(p) if s.project.comp(p).is_some() => s.activate_comp(p),
-            _ => {
-                if !s.state.open_comps.contains(&c) {
-                    s.state.open_comps.push(c);
-                }
+        restore_active(s, prev, c);
+    }
+    r.map_err(|e| e.to_string())
+}
+
+/// After a command ran with `target` made active: give the user back the comp that was active
+/// before (`prev`), or keep `target` open when there was none (or it is gone).
+fn restore_active(s: &mut Session, prev: Option<effectcraft_engine::project::ItemId>, target: effectcraft_engine::project::ItemId) {
+    if prev == Some(target) || s.state.active_comp != Some(target) {
+        return;
+    }
+    match prev {
+        Some(p) if s.project.comp(p).is_some() => s.activate_comp(p),
+        _ => {
+            if !s.state.open_comps.contains(&target) {
+                s.state.open_comps.push(target);
             }
         }
     }
-    r.map_err(|e| e.to_string())
 }
 
 /// Run a keyframe command that acts on the selected keys (`keys.velocity`, `keys.interpolation`,
 /// `keys.delete`) on the keys `targets` names instead (`[{layer, prop, index}]`, 0-based, in the
 /// command's comp): After Effects' per-key methods (`setTemporalEaseAtKey`, `removeKey`…) leave
 /// the user's key selection as it was. Selected keys that no longer exist drop out of it.
+///
+/// Every comp keeps its own key selection while it isn't active (#1037), so the command's comp is
+/// made active *before* the selection is swapped: swapping first would stash the target keys in
+/// the comp being left and run the command on the target comp's remembered selection instead
+/// (#1531).
 fn exec_on_keys(s: &mut Session, id: &str, params: J, targets: &J) -> Result<J, String> {
     use effectcraft_engine::KeyRef;
     use effectcraft_engine::project::{ItemId, LayerId};
@@ -195,11 +207,18 @@ fn exec_on_keys(s: &mut Session, id: &str, params: J, targets: &J) -> Result<J, 
         let key = l.props.find(prop).and_then(|pr| pr.keys.get(usize::try_from(index).ok()?)).ok_or("the keyframe no longer exists")?;
         keys.push(KeyRef { layer: LayerId(layer), prop, time: key.time });
     }
+    let prev = s.state.active_comp;
+    s.activate_comp(cid);
     let saved = std::mem::replace(&mut s.state.selected_keys, keys);
     let r = exec(s, id, params);
-    let comp = s.active_comp();
+    // The command may have removed keys, or the comp itself.
+    let comp = s.project.comp(cid);
     let exists = |k: &KeyRef| comp.and_then(|c| c.layer(k.layer)).and_then(|l| l.props.find(k.prop)).is_some_and(|pr| pr.keys.iter().any(|x| x.time == k.time));
-    s.state.selected_keys = saved.into_iter().filter(exists).collect();
+    let kept = saved.into_iter().filter(exists).collect();
+    if s.state.active_comp == Some(cid) {
+        s.state.selected_keys = kept;
+    }
+    restore_active(s, prev, cid);
     r
 }
 
