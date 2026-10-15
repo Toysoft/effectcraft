@@ -1145,6 +1145,7 @@ dependencies = [
 name = "effectcraft"
 version = "0.10.0"
 dependencies = [
+ "android-activity",
  "cpal",
  "effectcraft-engine",
  "effectcraft-host",
@@ -1164,6 +1165,16 @@ dependencies = [
  "winit",
  "winresource",
  "zbus",
+]
+
+[[package]]
+name = "effectcraft-android"
+version = "0.10.0"
+dependencies = [
+ "android-activity",
+ "effectcraft",
+ "jni 0.21.1",
+ "log",
 ]
 
 [[package]]
