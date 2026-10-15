@@ -1523,7 +1523,7 @@ impl Project {
             #[serde(flatten)]
             project: &'a Project,
         }
-        let text = serde_json::to_string_pretty(&File { saved_by: APP_VERSION, view, project: self })
+        let text = serde_json::to_string(&File { saved_by: APP_VERSION, view, project: self })
             .map_err(|e| ProjectError::Invalid(format!("the project can't be saved: {e}")))?;
         Project::from_json(&text)
             .map_err(|e| ProjectError::Invalid(format!("the project can't be saved: it holds a value a project file can't store ({e})")))?;
