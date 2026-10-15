@@ -117,6 +117,8 @@ pub(crate) struct Pool {
     /// working texture of another `Enc` before it is gone.
     owned: HashMap<u64, HashMap<(u32, u32), Vec<wgpu::Texture>>>,
     next_owner: u64,
+    /// Owners kept between [`Enc::lent`] calls, each lent to one `Enc` at a time.
+    idle: Vec<u64>,
 }
 
 /// In-`Enc` texture reuse ([`Pool::owned`]); tests turn it off to compare.
@@ -213,6 +215,22 @@ impl Pool {
             return;
         }
         self.release(t);
+    }
+
+    /// An owner for [`Enc::lent`]: an idle one with its kept textures, or a new one.
+    fn lend(&mut self) -> u64 {
+        self.idle.pop().unwrap_or_else(|| self.register())
+    }
+
+    /// [`Enc::lent`] is done with `owner` (its work submitted or discarded): keep its
+    /// textures for the next one, up to the pool budget.
+    fn give_back(&mut self, owner: u64) {
+        if let Some(m) = self.owned.get_mut(&owner)
+            && m.values().flatten().map(tex_bytes).sum::<usize>() > POOL_BUDGET
+        {
+            m.clear();
+        }
+        self.idle.push(owner);
     }
 
     fn take_owned(&mut self, owner: u64, w: u32, h: u32) -> Option<wgpu::Texture> {
@@ -991,6 +1009,8 @@ pub(crate) struct Enc<'g> {
     missing: bool,
     /// This `Enc`'s id in the texture pool (textures it may reuse at once).
     owner: u64,
+    /// `owner` is lent ([`Enc::lent`]) and outlives this `Enc`.
+    lent: bool,
 }
 
 impl Drop for Enc<'_> {
@@ -1000,7 +1020,11 @@ impl Drop for Enc<'_> {
             if let Some((_, id)) = self.enc.take() {
                 p.close(id);
             }
-            p.unregister(self.owner);
+            if self.lent {
+                p.give_back(self.owner);
+            } else {
+                p.unregister(self.owner);
+            }
         }
     }
 }
@@ -1008,7 +1032,18 @@ impl Drop for Enc<'_> {
 impl<'g> Enc<'g> {
     pub fn new(g: &'g GpuContext) -> Enc<'g> {
         let owner = g.pool.lock().map(|mut p| p.register()).unwrap_or(0);
-        Enc { g, enc: None, pending: 0, missing: false, owner }
+        Enc { g, enc: None, pending: 0, missing: false, owner, lent: false }
+    }
+
+    /// An `Enc` for self-contained work that ends in a readback (submitted and waited for, or
+    /// discarded), whose images never reach another `Enc`: it reuses the working textures of
+    /// earlier such work at once. A plain [`Enc::new`] hands its textures back through the
+    /// shared pool, where they wait for every open encoder, and a GPU frame keeps its encoder
+    /// open while the CPU renders layers with GPU effects, so every effect's intermediates
+    /// stayed allocated until the frame ended.
+    pub(crate) fn lent(g: &'g GpuContext) -> Enc<'g> {
+        let owner = g.pool.lock().map(|mut p| p.lend()).unwrap_or(0);
+        Enc { g, enc: None, pending: 0, missing: false, owner, lent: true }
     }
 
     /// Whether a dispatch since the last call named a kernel the device doesn't have (one
