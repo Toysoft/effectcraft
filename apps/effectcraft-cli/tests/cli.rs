@@ -160,6 +160,21 @@ fn unknown_options_are_usage_errors() {
     }
 }
 
+/// An argument that is not Unicode (a Latin-1 file name on Linux) is a usage error (exit 2)
+/// naming it, before anything runs: `std::env::args` panicked on one (exit 101).
+#[cfg(unix)]
+#[test]
+fn non_unicode_arguments_are_usage_errors() {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::OsStr::from_bytes(b"caf\xe9.png");
+    let out = bin().args(["render-frame", "--out"]).arg(name).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.contains("argument `caf\u{fffd}.png` is not valid Unicode"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+    assert!(out.stdout.is_empty(), "nothing ran");
+}
+
 /// A reader that closes stdout before the CLI writes (`| head`) is not a crash: the command
 /// still does its work and exits 0, without a panic (#167).
 #[test]
