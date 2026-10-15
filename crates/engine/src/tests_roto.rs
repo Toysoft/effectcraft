@@ -591,6 +591,9 @@ fn object_matte_mattes_persist_in_the_disk_cache() {
     };
     let (mut s, clip, solid) = setup(|f| draw(center(f)));
     enable(&mut s);
+    // An unrelated in-memory settings session must not replace this session's matte store.
+    let mut settings = Session { config: Some(std::sync::Arc::new(crate::config::MemoryConfig::default())), ..Default::default() };
+    settings.load_settings();
     let cid = s.active_comp_id().unwrap();
     s.edit("remove solid", None, |p, _| {
         p.comp_mut(cid).unwrap().layers.retain(|l| l.id != solid);

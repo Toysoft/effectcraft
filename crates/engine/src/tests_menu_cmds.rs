@@ -1527,6 +1527,19 @@ fn duplicate_with_shape_items_selected_duplicates_them_in_place() {
     assert_eq!(s.active_comp().unwrap().layers.len(), n + 1);
 }
 
+#[test]
+fn replacing_project_releases_old_layer_buffers_and_notifies_viewers() {
+    let mut s = comp();
+    let buffer = std::sync::Arc::new(effectcraft_effects::Buf { img: crate::render::Image::new(8, 8), offset: [0.0; 2], scale: 1.0 });
+    s.layer_cache.insert(123, buffer);
+    assert!(s.layer_cache.stats().bytes > 0);
+    s.drain_events();
+    s.replace_project(Default::default(), None);
+    assert_eq!(s.layer_cache.stats().bytes, 0);
+    assert_eq!(s.layer_cache.stats().entries, 0);
+    assert!(s.drain_events().contains(&Event::PurgeCaches));
+}
+
 /// The Interpret Footage form sends "Loop (times)" as a float (3.0); it must still be applied (#909).
 #[test]
 fn interpret_footage_loop_from_form_float() {

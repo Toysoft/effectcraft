@@ -159,7 +159,7 @@ fn modifiers(p: &Value) -> egui::Modifiers {
 /// Resolve a point from `{id}` (element centre) or `{x, y}`.
 fn point(app: &EffectcraftApp, p: &Value) -> Result<egui::Pos2, String> {
     if let Some(id) = p.get("id").and_then(Value::as_str) {
-        let e = app.auto.find(id).ok_or_else(|| format!("{RETRY}no element `{id}` (see ui.elements)"))?;
+        let e = app.auto.find_current(id).ok_or_else(|| format!("{RETRY}no element `{id}` (see ui.elements)"))?;
         let fx = p.get("fx").and_then(Value::as_f64).unwrap_or(0.5) as f32;
         let fy = p.get("fy").and_then(Value::as_f64).unwrap_or(0.5) as f32;
         return Ok(egui::pos2(e.rect[0] + e.rect[2] * fx, e.rect[1] + e.rect[3] * fy));
@@ -200,7 +200,7 @@ pub fn handle(app: &mut EffectcraftApp, ctx: &egui::Context, req: &ControlReques
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.elements" => {
             let prefix = s("prefix").unwrap_or("");
-            ok(serde_json::to_value(app.auto.query(prefix)).unwrap_or_default())
+            ok(serde_json::to_value(app.auto.query_current(prefix)).unwrap_or_default())
         }
         "ui.set" => {
             if let Some(t) = s("tool") {
@@ -437,8 +437,8 @@ pub fn handle(app: &mut EffectcraftApp, ctx: &egui::Context, req: &ControlReques
             )
         }
         "ui.screenshot" => {
-            let crop = s("panel").and_then(PanelKind::from_name).and_then(|pk| app.auto.find(&format!("panel.{}", pk.id())).map(|e| e.rect));
-            let crop = crop.or_else(|| s("id").and_then(|id| app.auto.find(id).map(|e| e.rect)));
+            let crop = s("panel").and_then(PanelKind::from_name).and_then(|pk| app.auto.find_current(&format!("panel.{}", pk.id())).map(|e| e.rect));
+            let crop = crop.or_else(|| s("id").and_then(|id| app.auto.find_current(id).map(|e| e.rect)));
             // Bring the window on screen so a frame is presented, without taking keyboard focus.
             app.raise_for_control(ctx);
             Outcome::Screenshot { path: s("path").map(str::to_string), crop }
@@ -557,7 +557,7 @@ pub fn inspect(app: &EffectcraftApp, ctx: &egui::Context) -> Value {
         "activeComp": app.session.state.active_comp.map(|i| i.0),
         "selectedLayers": app.session.state.selected_layers.iter().map(|c| c.0).collect::<Vec<_>>(),
         "selectedKeys": app.session.state.selected_keys.len(),
-        "elements": app.auto.previous.len(),
+        "elements": app.auto.elements.len(),
         "keyboardFocus": keyboard_focus,
         "windowFocused": ctx.input(|i| i.focused),
         "workspaceStorageError": app.workspace_store.error,
