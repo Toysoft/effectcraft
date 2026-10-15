@@ -157,11 +157,16 @@ pub(crate) fn exec(s: &mut Session, id: &str, params: J) -> Result<J, String> {
         s.state.selected_layers.clear();
     }
     let r = s.execute_for_script(id, params);
-    if let Some(c) = target
-        && prev != Some(c)
-        && s.state.active_comp == Some(c)
-        && id != "comp.open"
-    {
+    if let Some(c) = target {
+        leave_comp(s, id, c, prev);
+    }
+    r.map_err(|e| e.to_string())
+}
+
+/// After a script's command on comp `c`, make `prev` (the comp active before it) active again,
+/// unless the command opened `c` on purpose; with no comp to go back to, `c` stays open.
+fn leave_comp(s: &mut Session, id: &str, c: effectcraft_engine::project::ItemId, prev: Option<effectcraft_engine::project::ItemId>) {
+    if prev != Some(c) && s.state.active_comp == Some(c) && id != "comp.open" {
         match prev {
             Some(p) if s.project.comp(p).is_some() => s.activate_comp(p),
             _ => {
@@ -171,7 +176,6 @@ pub(crate) fn exec(s: &mut Session, id: &str, params: J) -> Result<J, String> {
             }
         }
     }
-    r.map_err(|e| e.to_string())
 }
 
 /// Run a keyframe command that acts on the selected keys (`keys.velocity`, `keys.interpolation`,
@@ -195,11 +199,17 @@ fn exec_on_keys(s: &mut Session, id: &str, params: J, targets: &J) -> Result<J, 
         let key = l.props.find(prop).and_then(|pr| pr.keys.get(usize::try_from(index).ok()?)).ok_or("the keyframe no longer exists")?;
         keys.push(KeyRef { layer: LayerId(layer), prop, time: key.time });
     }
+    // Make the keys' comp active before selecting them: activating a comp brings back the key
+    // selection it had, which would replace these keys and leave the command nothing to act on
+    // when the comp isn't the active one (#1531).
+    let prev = s.state.active_comp;
+    s.activate_comp(cid);
     let saved = std::mem::replace(&mut s.state.selected_keys, keys);
     let r = exec(s, id, params);
     let comp = s.active_comp();
     let exists = |k: &KeyRef| comp.and_then(|c| c.layer(k.layer)).and_then(|l| l.props.find(k.prop)).is_some_and(|pr| pr.keys.iter().any(|x| x.time == k.time));
     s.state.selected_keys = saved.into_iter().filter(exists).collect();
+    leave_comp(s, id, cid, prev);
     r
 }
 
