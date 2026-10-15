@@ -1281,6 +1281,13 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             context_actions.push(("comp.copyFrame".to_owned(), serde_json::json!({"comp": cid.0})));
             ui.close();
         }
+        // The comp this viewer shows, which is not always the active one.
+        let settings = ui.button(crate::i18n::tr("Composition Settings…"));
+        app.auto.add("viewer.context.settings", settings.rect, "Composition Settings…");
+        if settings.clicked() {
+            context_actions.push(("comp.settings".to_owned(), serde_json::json!({"comp": cid.0})));
+            ui.close();
+        }
     });
     for (id, params) in context_actions {
         if let Err(e) = crate::menus::invoke(app, &ctx, &id, params) {
