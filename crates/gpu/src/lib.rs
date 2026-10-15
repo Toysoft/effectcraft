@@ -83,6 +83,7 @@ mod ops;
 mod particles;
 mod readback;
 mod walk;
+mod yuv;
 
 use std::sync::Arc;
 
@@ -318,13 +319,23 @@ impl Accelerator for Gpu {
     }
 
     fn comp_frame(&self, r: &Renderer, comp: ItemId, t: Tick) -> Option<Image> {
-        let img = self.render(r, comp, t);
+        let armed = self.ctx.arm_oom();
+        let before = self.ctx.oom_count();
+        let mut img = self.render(r, comp, t);
+        drop(armed);
+        let oom = self.ctx.oom_count() != before;
+        if oom {
+            // A failed allocation invalidated the frame: decline it, keep the device.
+            self.ctx.settle_oom();
+            img = None;
+        }
         if img.is_none() {
             // The caller renders the frame on the CPU; say so and why, or an export that falls
             // back frame after frame is only mysteriously slow. Once per comp and reason as a
             // warning (the log keeps only the last few hundred, for the System Report), then at
             // debug level.
-            let reason = self.decline_reason();
+            let reason = if oom { format!("{OUT_OF_MEMORY}: a GPU allocation failed while the frame recorded") } else { self.decline_reason() };
+            effectcraft_render::gpu_flags::note_decline(reason.clone());
             let first = self.declined.lock().map(|mut seen| seen.len() < 256 && seen.insert((comp.0, reason.clone()))).unwrap_or(false);
             if first {
                 log::warn!(target: "effectcraft_gpu", "GPU declined the frame at {:.3} s, the CPU renders it: {reason}", t.seconds());
@@ -333,6 +344,82 @@ impl Accelerator for Gpu {
             }
         }
         img
+    }
+
+    fn adapter_info(&self) -> Option<effectcraft_render::AdapterInfo> {
+        Some(self.ctx.info.clone())
+    }
+
+    fn set_memory_budgets(&self, upload: usize, pool: usize) {
+        self.ctx.set_upload_budget(upload);
+        self.ctx.set_pool_budget(pool);
+    }
+
+    fn comp_frame_yuv420(
+        &self,
+        r: &Renderer,
+        comp: ItemId,
+        t: Tick,
+        bg: [f32; 3],
+        done: Box<dyn FnOnce(Option<Vec<u8>>) + Send>,
+    ) -> Result<(), Box<dyn FnOnce(Option<Vec<u8>>) + Send>> {
+        if let Err(e) = self.ctx.check_health() {
+            effectcraft_render::gpu_flags::note_decline(format!("device unhealthy: {e}"));
+            return Err(done);
+        }
+        if !self.ctx.can_readback() || self.ctx.deferred.is_some() {
+            effectcraft_render::gpu_flags::note_decline("no synchronous readback on this device");
+            return Err(done);
+        }
+        let yp = self.ctx.yuv.get_or_init(|| yuv::YuvPipe::new(&self.ctx.device));
+        // An allocation that fails while the frame records is caught here instead of retiring
+        // the device, so the caller can lower its frames in flight and retry the frame on the
+        // GPU. `done` stays reclaimable until the readback takes it.
+        let slot = Arc::new(std::sync::Mutex::new(Some(done)));
+        let armed = self.ctx.arm_oom();
+        let before = self.ctx.oom_count();
+        let mut e = Enc::new(&self.ctx);
+        let img = walk::render(&mut e, r, comp, t).filter(|i| i.width % 8 == 0 && i.height % 2 == 0);
+        let rendered = img.is_some();
+        if let Some(img) = &img
+            && self.ctx.oom_count() == before
+        {
+            let s2 = slot.clone();
+            yuv::convert(
+                &mut e,
+                yp,
+                img,
+                bg,
+                Box::new(move |b| {
+                    if let Some(d) = s2.lock().ok().and_then(|mut d| d.take()) {
+                        d(b);
+                    }
+                }),
+            );
+        }
+        drop(e);
+        drop(img);
+        drop(armed);
+        let reclaim = || slot.lock().ok().and_then(|mut d| d.take());
+        if self.ctx.oom_count() != before {
+            self.ctx.settle_oom();
+            effectcraft_render::gpu_flags::note_decline(format!("{OUT_OF_MEMORY}: a GPU allocation failed while the frame recorded"));
+            // The readback already reported the failure if it took `done`.
+            return reclaim().map_or(Ok(()), Err);
+        }
+        if !rendered {
+            effectcraft_render::gpu_flags::note_decline(self.decline_reason());
+            return reclaim().map_or(Ok(()), Err);
+        }
+        Ok(())
+    }
+
+    fn poll_readbacks(&self, wait: bool) {
+        let kind =
+            if wait { wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_millis(50)) } } else { wgpu::PollType::Poll };
+        // Straight to the device: a wait that times out (the queue is still busy) is normal
+        // here and must not retire the context's readbacks.
+        let _ = self.ctx.device.poll(kind);
     }
 
     fn supports_effect(&self, id: &str) -> bool {
@@ -457,3 +544,7 @@ mod tests_fx_warp;
 mod tests_init;
 #[cfg(test)]
 mod tests_particles;
+
+/// The prefix of a decline reason that a failed GPU allocation caused: the export scheduler
+/// lowers its frames in flight and retries the frame on the GPU when it sees it.
+pub const OUT_OF_MEMORY: &str = "out of memory";

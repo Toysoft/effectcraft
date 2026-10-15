@@ -41,6 +41,7 @@
 
 use std::io::Write;
 
+mod export_host;
 mod template;
 
 use effectcraft_automation::tools::{self, Reply};
@@ -103,6 +104,10 @@ const USAGE: &str = "usage: effectcraft-cli <info|commands|exec|run|props|get|se
          [--jpeg-quality N] [--bitrate KBPS] [--prores PROFILE] [--audio auto|on|off]
          [--profile main|main10] [--level auto|4.1] [--rate-control bitrate|quality] [--video-quality N]
          [--keyint FRAMES] [--webm-codec vp9|av1] [--audio-bitrate KBPS] [--opus-app audio|voice] | --queue
+         [--gpu] [--print-tuning] [--threads N] [--tuning-config FILE] [--<export option> VALUE ...]
+         (export options: backend, gpu-frames, gpu-inflight, cpu-frames, cpu-pool, cache-mb,
+          precomp-resident, gpu-yuv, async-readback, vram-budget-mb, ...; see TUNING.md; each also
+          EFFECTCRAFT_EXPORT_<OPTION>; CLI > env > config > auto)
                                            (formats h264|hevc|av1|prores|webm|png|jpeg|tiff|exr|gif|wav|aiff;
                                            --profile..--keyint: HEVC / AV1, --audio-bitrate/--opus-app: WebM Opus)
                                            a relative --out is relative to the working directory
@@ -169,11 +174,29 @@ const VALUED: &[&str] = &[
     // mcp
     "--automation-read-root",
     "--automation-write-root",
+    "--backend",
+    "--gpu-frames",
+    "--gpu-inflight",
+    "--cpu-frames",
+    "--cpu-pool",
+    "--gpu-pool",
+    "--cache-mb",
+    "--precomp-resident",
+    "--gpu-yuv",
+    "--async-readback",
+    "--vram-budget-mb",
+    "--ram-budget-mb",
+    "--cpu-batch",
+    "--upload-budget-mb",
+    "--pool-budget-mb",
+    "--tuning-config",
+    "--threads",
 ];
 
 /// Options without a value. Any other `--option` is a usage error.
 const FLAGS: &[&str] = &[
     "--json",
+    "--print-tuning",
     "--save",
     "--demo",
     "--empty",
@@ -359,6 +382,40 @@ fn session(args: &Args) -> Result<effectcraft_engine::Session, Failure> {
         s.accel_note = Some("headless: renders on the CPU unless started with --gpu".into());
     }
     Ok(s)
+}
+
+/// `render` export options (`effectcraft_export::tuning`): every `--<option> VALUE` of
+/// `tuning::OPTIONS`, `--tuning-config FILE`, `--print-tuning` (resolve and print, render
+/// nothing) and `--threads N` (rayon threads; simulates a smaller CPU). `RUST_LOG=info` logs
+/// the resolved table and which compositor rendered each frame.
+fn export_tuning(args: &Args) -> Result<(), Failure> {
+    use effectcraft_export::tuning::{OPTIONS, Overrides, Request, set_request};
+    if std::env::var_os("RUST_LOG").is_some() {
+        effectcraft_engine::logging::install();
+    }
+    let threads = match args.opt("--threads") {
+        Some(v) => Some(v.parse::<usize>().map_err(|_| Failure::Usage(format!("--threads {v}: expected a number")))?),
+        None => std::env::var("EFFECTCRAFT_EXPORT_THREADS").ok().and_then(|v| v.trim().parse().ok()),
+    };
+    if let Some(n) = threads.filter(|n| *n > 0) {
+        rayon::ThreadPoolBuilder::new().num_threads(n).build_global().map_err(|e| Failure::Error(format!("--threads: {e}")))?;
+    }
+    let mut cli = Overrides::default();
+    for (key, _) in OPTIONS {
+        if let Some(v) = args.opt(&format!("--{key}")) {
+            cli.set(key, v).map_err(Failure::Usage)?;
+        }
+    }
+    let read = |p: &str| std::fs::read_to_string(p).map_err(|e| e.to_string()).and_then(|t| Overrides::from_config(&t));
+    let config = match args.opt("--tuning-config") {
+        Some(p) => Some(read(p).map_err(|e| Failure::Usage(format!("--tuning-config {p}: {e}")))?),
+        None => std::env::var("EFFECTCRAFT_EXPORT_CONFIG")
+            .ok()
+            .and_then(|p| read(&p).map_err(|e| eprintln!("warning: EFFECTCRAFT_EXPORT_CONFIG {p}: {e} (ignored)")).ok()),
+    };
+    let env = Overrides::from_lookup(|k| std::env::var(k).ok());
+    set_request(Request { cli, env, config, host: export_host::probe(), print_only: args.flag("--print-tuning") });
+    Ok(())
 }
 
 /// `--save` / `--save-as` after a mutating command.
@@ -657,6 +714,7 @@ fn render(args: &Args, json_out: bool) -> Result<(), Failure> {
     if args.opt("--bridge").is_some() {
         return usage_err("render runs headless; use `exec renderQueue.add` / `renderQueue.render` with --bridge");
     }
+    export_tuning(args)?;
     let mut s = session(args)?;
     if args.opt("--template").is_some() {
         template::prepare(&mut s, args)?;
@@ -762,6 +820,10 @@ fn render(args: &Args, json_out: bool) -> Result<(), Failure> {
     s.poll_render();
     if tty {
         note!();
+    }
+    if args.flag("--print-tuning") {
+        // The export printed its tuning and stopped before rendering.
+        return Ok(());
     }
     let mut results = vec![];
     let mut failed = vec![];

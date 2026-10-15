@@ -22,7 +22,92 @@ struct State {
     timer_armed: bool,
 }
 #[derive(Default)]
-pub(crate) struct Readbacks(Mutex<State>);
+pub(crate) struct Readbacks(Mutex<State>, pub(crate) Oom);
+
+/// A failed allocation reported through the device's uncaptured-error handler.
+///
+/// wgpu reports a failed allocation (out-of-memory, or an internal error on drivers that
+/// report it that way) to the uncaptured-error handler of the thread-independent device,
+/// whichever thread allocated: the export renders a frame's layers on several threads, so
+/// thread-local error scopes miss most of them. Such an error does not lose the device; only
+/// the frame being recorded is invalid. The handler counts it instead of retiring the
+/// context, and the validation errors that the frame's invalid resources cause afterwards
+/// are absorbed until the frame is declined ([`Oom::settle`]). This applies only while a
+/// caller that checks [`Oom::count`] records a frame ([`Oom::arm`]); any other error, and
+/// any error outside such a frame (the viewer, the app's preview), still retires the context
+/// as before.
+#[derive(Default)]
+pub(crate) struct Oom {
+    count: std::sync::atomic::AtomicU64,
+    tainted: std::sync::atomic::AtomicBool,
+    armed: std::sync::atomic::AtomicUsize,
+}
+
+/// Keeps [`Oom`] armed while a checked frame records.
+pub(crate) struct Armed<'a>(&'a Oom);
+
+impl Drop for Armed<'_> {
+    fn drop(&mut self) {
+        self.0.armed.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The kind of an uncaptured device error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ErrorKind {
+    OutOfMemory,
+    Internal,
+    Validation,
+}
+
+/// What the handler does with an uncaptured device error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OnError {
+    /// Counted against the frame being recorded; the device stays in use.
+    Absorb,
+    /// Retire the context (as before).
+    Retire,
+}
+
+impl Oom {
+    /// A frame whose caller checks [`Oom::count`] records until the guard drops.
+    pub(crate) fn arm(&self) -> Armed<'_> {
+        self.armed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Armed(self)
+    }
+
+    pub(crate) fn on_error(&self, kind: ErrorKind) -> OnError {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.armed.load(SeqCst) == 0 {
+            return OnError::Retire;
+        }
+        match kind {
+            ErrorKind::OutOfMemory | ErrorKind::Internal => {
+                self.count.fetch_add(1, SeqCst);
+                self.tainted.store(true, SeqCst);
+                OnError::Absorb
+            }
+            ErrorKind::Validation if self.tainted.load(SeqCst) => {
+                // Still invalidates whatever frame recorded it (it may be a frame that started
+                // after the failed allocation, on another thread): count it, or that frame is kept.
+                self.count.fetch_add(1, SeqCst);
+                OnError::Absorb
+            }
+            ErrorKind::Validation => OnError::Retire,
+        }
+    }
+
+    /// Failed allocations so far: a frame whose count changed while it recorded is invalid.
+    pub(crate) fn count(&self) -> u64 {
+        self.count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The invalid frame was declined and its resources dropped: validation errors retire
+    /// the context again.
+    pub(crate) fn settle(&self) {
+        self.tainted.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 pub(crate) struct Ticket {
     owner: Weak<Readbacks>,
     id: u64,
@@ -264,8 +349,18 @@ pub(crate) fn install(device: &wgpu::Device, me: &Arc<Readbacks>) {
     let fail = Arc::new(failure_notifier(me));
     let lost = fail.clone();
     device.set_device_lost_callback(move |reason, message| lost(format!("GPU device lost ({reason:?}): {message}")));
+    let weak = Arc::downgrade(me);
     device.on_uncaptured_error(Arc::new(move |e| {
         let message = format!("uncaptured GPU error: {e}");
+        let kind = match &e {
+            wgpu::Error::OutOfMemory { .. } => ErrorKind::OutOfMemory,
+            wgpu::Error::Validation { .. } => ErrorKind::Validation,
+            _ => ErrorKind::Internal,
+        };
+        if weak.upgrade().is_some_and(|me| me.1.on_error(kind) == OnError::Absorb) {
+            log::warn!("{message} (the frame being recorded is declined; the device stays in use)");
+            return;
+        }
         fail(message.clone());
         #[cfg(test)]
         #[allow(clippy::panic)]
@@ -525,5 +620,52 @@ mod tests {
     fn no_partial_rows() {
         assert!(packed(&[0; 7], 4, 4, 2).is_err());
         assert_eq!(packed(&[1, 2, 0, 0, 3, 4], 2, 4, 2).unwrap(), vec![1, 2, 3, 4]);
+    }
+}
+
+#[cfg(test)]
+mod oom_tests {
+    use super::{ErrorKind, OnError, Oom};
+
+    #[test]
+    fn a_failed_allocation_does_not_retire_the_device() {
+        let o = Oom::default();
+        // Outside a checked frame (the viewer, the app's preview): retire, as before.
+        assert_eq!(o.on_error(ErrorKind::OutOfMemory), OnError::Retire);
+        let armed = o.arm();
+        assert_eq!(o.on_error(ErrorKind::Validation), OnError::Retire);
+        let before = o.count();
+        assert_eq!(o.on_error(ErrorKind::OutOfMemory), OnError::Absorb);
+        // The invalid resources it left fail validation: absorbed until the frame is declined,
+        // and counted, so work recorded after the failed allocation sees it too.
+        assert_eq!(o.on_error(ErrorKind::Validation), OnError::Absorb);
+        assert_eq!(o.count(), before + 2);
+        o.settle();
+        assert_eq!(o.on_error(ErrorKind::Validation), OnError::Retire);
+        // Drivers that report a failed allocation as an internal error count too.
+        assert_eq!(o.on_error(ErrorKind::Internal), OnError::Absorb);
+        assert_eq!(o.count(), before + 3);
+        drop(armed);
+        assert_eq!(o.on_error(ErrorKind::OutOfMemory), OnError::Retire);
+        assert_eq!(o.count(), before + 3);
+    }
+
+    /// The wrong-layers bug: a readback that starts after the failed allocation (a layer the
+    /// frame renders on the CPU, its effect chain run on the GPU) only sees the validation
+    /// errors of the invalid resources. They must change the count, or the readback returns a
+    /// reused staging buffer's earlier pixels and they reach the layer cache.
+    #[test]
+    fn validation_after_a_failed_allocation_invalidates_later_readbacks() {
+        let o = Oom::default();
+        let _armed = o.arm();
+        assert_eq!(o.on_error(ErrorKind::OutOfMemory), OnError::Absorb);
+        let readback_start = o.count();
+        assert_eq!(o.on_error(ErrorKind::Validation), OnError::Absorb);
+        assert_ne!(o.count(), readback_start, "the readback would be kept");
+        // Once the declined frame settled, validation errors retire the device and no longer count.
+        o.settle();
+        let after = o.count();
+        assert_eq!(o.on_error(ErrorKind::Validation), OnError::Retire);
+        assert_eq!(o.count(), after);
     }
 }

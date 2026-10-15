@@ -295,7 +295,7 @@ fn draw_resident_fx(e: &mut Enc, r: &Renderer, ctx: &EvalCtx, layer: &Layer, can
 /// overrides, frame blending, nested motion-blur sampling; see `Renderer::precomp_source`);
 /// `Some(None)`: the GPU failed.
 fn draw_precomp(e: &mut Enc, r: &Renderer, ctx: &EvalCtx, layer: &Layer, canvas: &mut GpuImage, opacity: f32) -> Option<Option<()>> {
-    if layer.masks().is_some_and(|m| !m.children.is_empty()) || styles::active(ctx, layer) {
+    if !effectcraft_render::gpu_flags::get().precomp_resident || layer.masks().is_some_and(|m| !m.children.is_empty()) || styles::active(ctx, layer) {
         return None;
     }
     let (sub, item, lt, bs) = r.precomp_source(ctx, layer)?;

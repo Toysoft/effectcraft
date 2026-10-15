@@ -117,6 +117,8 @@ pub(crate) struct Pool {
     /// working texture of another `Enc` before it is gone.
     owned: HashMap<u64, HashMap<(u32, u32), Vec<wgpu::Texture>>>,
     next_owner: u64,
+    /// Bytes of free textures kept ([`GpuContext::set_pool_budget`]; default [`POOL_BUDGET`]).
+    budget: Option<usize>,
 }
 
 /// In-`Enc` texture reuse ([`Pool::owned`]); tests turn it off to compare.
@@ -163,7 +165,7 @@ impl Pool {
 
     fn make_free(&mut self, t: wgpu::Texture) {
         let b = tex_bytes(&t);
-        if self.bytes + b > POOL_BUDGET {
+        if self.bytes + b > self.budget.unwrap_or(POOL_BUDGET) {
             return;
         }
         self.bytes += b;
@@ -315,6 +317,10 @@ pub struct GpuContext {
     pub(crate) particle_states: crate::particles::StatesCell,
     /// Deferred readbacks (a browser worker's WebGPU device), see [`crate::deferred`].
     pub(crate) deferred: Option<Arc<crate::deferred::Deferred>>,
+    /// Export frame → YUV 4:2:0 conversion (built on first use).
+    pub(crate) yuv: std::sync::OnceLock<crate::yuv::YuvPipe>,
+    /// The adapter (export tuning).
+    pub(crate) info: effectcraft_render::AdapterInfo,
     readbacks: Arc<crate::readback::Readbacks>,
 }
 
@@ -627,7 +633,18 @@ impl GpuContext {
             init_resource(&device, "dummy storage buffer", || buffer_init(&device, &queue, Some("dummy"), &[0u8; 16], wgpu::BufferUsages::STORAGE))?;
         let dummy_tex = init_resource(&device, "dummy texture view", || dummy.create_view(&Default::default()))?;
         let max_dim = device.limits().max_texture_dimension_2d;
+        let ai = adapter.get_info();
+        let adapter_info = effectcraft_render::AdapterInfo {
+            name: ai.name.clone(),
+            vendor: ai.vendor,
+            device_type: format!("{:?}", ai.device_type),
+            backend: format!("{:?}", ai.backend),
+            max_texture_dim: max_dim,
+            max_buffer_bytes: device.limits().max_buffer_size,
+        };
         Ok(GpuContext {
+            info: adapter_info,
+            yuv: Default::default(),
             device,
             queue,
             name,
@@ -663,6 +680,24 @@ impl GpuContext {
     /// Shared-device hosts must forward their device failures through the notifier.
     pub fn check_health(&self) -> Result<(), String> {
         self.readbacks.check()
+    }
+
+    /// Treat failed allocations as declining the frame being recorded, until the guard drops
+    /// (see [`crate::readback::Oom`]).
+    pub(crate) fn arm_oom(&self) -> crate::readback::Armed<'_> {
+        self.readbacks.1.arm()
+    }
+
+    /// Failed allocations reported so far (see [`crate::readback::Oom`]).
+    pub(crate) fn oom_count(&self) -> u64 {
+        self.readbacks.1.count()
+    }
+
+    /// A frame invalidated by a failed allocation was declined: drop the cached uploads and
+    /// let validation errors retire the context again.
+    pub(crate) fn settle_oom(&self) {
+        self.clear_uploads();
+        self.readbacks.1.settle();
     }
 
     /// A notification hook for the owner of a shared device's error/loss handlers.
@@ -878,6 +913,13 @@ impl GpuContext {
     /// it (a small GPU); the least recently used textures go first.
     pub fn set_upload_budget(&self, bytes: usize) {
         self.upload_budget.store(bytes.max(1 << 20), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Bytes of free working textures kept for reuse (default 768 MB).
+    pub fn set_pool_budget(&self, bytes: usize) {
+        if let Ok(mut p) = self.pool.lock() {
+            p.budget = Some(bytes);
+        }
     }
 
     pub fn upload_budget(&self) -> usize {
@@ -1201,6 +1243,7 @@ impl<'g> Enc<'g> {
         if !self.g.can_wait() {
             return None;
         }
+        let oom = self.g.readbacks.1.count();
         self.g.transfers.count(false, out.len());
         let layout =
             crate::readback::Layout::new(w, h, bpp, self.g.device.limits().max_buffer_size).map_err(|e| log::error!("gpu texture readback: {e}")).ok()?;
@@ -1226,6 +1269,12 @@ impl<'g> Enc<'g> {
         );
         self.submit();
         let bytes = self.g.read_buffer(&buf, row, padded as usize, h as usize).map_err(|e| log::error!("gpu texture readback: {e}")).ok()?;
+        // An absorbed OOM means the copy above (or the work that filled `texture`) may not
+        // have run: a reused staging buffer then still holds an earlier readback's pixels.
+        if self.g.readbacks.1.count() != oom {
+            log::warn!("gpu texture readback discarded: device ran out of memory while it was recorded");
+            return None;
+        }
         if bytes.len() != out.len() {
             log::error!("gpu texture readback size mismatch");
             return None;

@@ -30,6 +30,11 @@ pub(crate) trait VideoEncoder {
     fn sample_entry(&self) -> SampleEntry;
     fn encode(&mut self, rgba: &[u8], index: u64) -> Result<Vec<Packet>>;
     fn flush(&mut self) -> Result<Vec<Packet>>;
+    /// Encode a frame already in the encoder's 8-bit 4:2:0 layout (Y, then U and V planes at
+    /// half size; [`rgba_to_yuv420`]'s output). Only H.264 takes it.
+    fn encode_yuv(&mut self, _yuv: &[u8], _index: u64) -> Result<Vec<Packet>> {
+        Err(ExportError::Unsupported("YUV input".into()))
+    }
     /// Edit-list media start (B-frame delay) in the track timescale.
     fn media_start(&self) -> Option<i64> {
         None
@@ -81,6 +86,19 @@ impl VideoEncoder for H264 {
     }
     fn flush(&mut self) -> Result<Vec<Packet>> {
         let ps = self.enc.flush();
+        Ok(self.packets(ps))
+    }
+    fn encode_yuv(&mut self, yuv: &[u8], index: u64) -> Result<Vec<Packet>> {
+        let (w, h) = (self.w as usize, self.h as usize);
+        let cw = w.div_ceil(2);
+        let c = cw * h.div_ceil(2);
+        if yuv.len() != w * h + 2 * c {
+            return Err(ExportError::Unsupported(format!("YUV frame of {} bytes for {w}x{h}", yuv.len())));
+        }
+        let (y, uv) = yuv.split_at(w * h);
+        let (u, v) = uv.split_at(c);
+        let frame = filmcraft_h264enc::YuvFrame { y, u, v, y_stride: w, uv_stride: cw };
+        let ps = self.enc.try_encode(&frame, index as i64 * self.rate.den).map_err(enc)?;
         Ok(self.packets(ps))
     }
     fn media_start(&self) -> Option<i64> {
@@ -257,22 +275,47 @@ pub(crate) async fn movie(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut St
         c => c,
     };
     let mut venc: Box<dyn VideoEncoder> = match fmt {
-        OutputFormat::H264 => Box::new(H264::new(w, h, rate, job.output.bitrate_kbps)?),
+        OutputFormat::H264 => {
+            log::info!(target: "effectcraft_export", "H.264 encoder: software");
+            Box::new(H264::new(w, h, rate, job.output.bitrate_kbps)?)
+        }
         OutputFormat::Hevc => Box::new(crate::hevc_av1::Hevc::new(w, h, rate, job.output)?),
         OutputFormat::Av1 => Box::new(crate::hevc_av1::Av1::new(w, h, rate, job.output)?),
         OutputFormat::Uncompressed => Box::new(crate::uncompressed::Raw::new(w, h, channels == Channels::Rgba)?),
         _ => Box::new(ProRes::new(w, h, job.output.prores_profile, if channels == Channels::Alpha { Channels::Rgb } else { channels })),
     };
     let brand = if matches!(fmt, OutputFormat::ProRes | OutputFormat::Uncompressed) { Brand::Mov } else { Brand::Mp4 };
-    let batch = batch_size();
-    let render = |_: u64, img: effectcraft_raster::Image| -> Vec<u8> { job.pixels(&img, comp, channels, w, h) };
+    let batch = batch_size(job);
+    // Frames reach the encoder as 8-bit RGBA, or (H.264 on a GPU worker) as 4:2:0 converted
+    // on the device.
+    enum Px {
+        Rgba(Vec<u8>),
+        Yuv(Vec<u8>),
+    }
+    let rendered = std::sync::Mutex::new(None);
+    let render = |_: u64, img: effectcraft_raster::Image| -> Px {
+        rendered.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert((img.width, img.height));
+        Px::Rgba(job.pixels(&img, comp, channels, w, h))
+    };
+    let enc_s = std::cell::Cell::new(0f64);
+    let encode = |venc: &mut Box<dyn VideoEncoder>, px: &Px, k: u64| -> Result<Vec<Packet>> {
+        let t = std::time::Instant::now();
+        let r = match px {
+            Px::Rgba(b) => venc.encode(b, k),
+            Px::Yuv(b) => venc.encode_yuv(b, k),
+        };
+        enc_s.set(enc_s.get() + t.elapsed().as_secs_f64());
+        r
+    };
 
     // Encode the first batch before creating tracks: encoders finalise their config on frame 1.
-    let first_end = batch.min(st.total);
-    let first: Vec<Vec<u8>> = job.frames(comp, (0..first_end).collect(), render).await;
+    // A scheduled plan streams every frame after the first.
+    let streaming = matches!(job.plan, crate::tuning::Plan::Scheduled { .. });
+    let first_end = if streaming { 1 } else { batch }.min(st.total);
+    let first: Vec<Px> = job.frames(comp, (0..first_end).collect(), render).await;
     let mut pending = Vec::new();
     for (k, px) in first.iter().enumerate() {
-        pending.extend(venc.encode(px, k as u64)?);
+        pending.extend(encode(&mut venc, px, k as u64)?);
     }
     drop(first);
     st.advance(first_end)?;
@@ -356,11 +399,43 @@ pub(crate) async fn movie(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut St
     write_video(&mut mux, pending)?;
     write_audio_until(&mut mux, frame_end_time(first_end), &mut cursor)?;
     let mut i = first_end;
+    if streaming && i < total {
+        // Reorder buffer: up to 16 frames, at most ~2 GiB of 8-bit RGBA.
+        let cap = ((2usize << 30) / ((w as usize * h as usize * 4).max(1))).clamp(4, 16);
+        let ks: Vec<u64> = (i..total).collect();
+        let yuv = |_: u64, b: Vec<u8>| Px::Yuv(b);
+        let rendered = *rendered.lock().unwrap_or_else(|e| e.into_inner());
+        let direct_ok = fmt == OutputFormat::H264 && channels == Channels::Rgb && job.yuv_direct_ok(w, h, rendered);
+        let direct = crate::pipeline::Direct { bg: comp.background, map: &yuv };
+        log::info!(target: "effectcraft_export", "GPU-side YUV 4:2:0 + async readback: {}", if direct_ok { "on" } else { "off" });
+        let t_stream = std::time::Instant::now();
+        let (mut mux_s, mut n) = (0f64, 0u64);
+        job.stream(comp, &ks, &render, cap, direct_ok.then_some(&direct), |k, px| {
+            let ps = encode(&mut venc, &px, k)?;
+            drop(px);
+            let t = std::time::Instant::now();
+            write_video(&mut mux, ps)?;
+            write_audio_until(&mut mux, frame_end_time(k + 1), &mut cursor)?;
+            mux_s += t.elapsed().as_secs_f64();
+            n += 1;
+            st.advance(1)
+        })?;
+        let wall = t_stream.elapsed().as_secs_f64();
+        log::info!(
+            target: "effectcraft_export",
+            "encoder: {n} streamed frames, H.264 encode {:.1} ms/frame (total {:.1} s incl. frame 0), mux+audio {:.1} ms/frame; consumer busy {:.0}% of {wall:.1} s",
+            enc_s.get() * 1e3 / (n + 1) as f64,
+            enc_s.get(),
+            mux_s * 1e3 / n.max(1) as f64,
+            100.0 * (enc_s.get() + mux_s) / wall.max(1e-9)
+        );
+        i = total;
+    }
     while i < total {
         let end = (i + batch).min(total);
-        let frames: Vec<Vec<u8>> = job.frames(comp, (i..end).collect(), render).await;
+        let frames: Vec<Px> = job.frames(comp, (i..end).collect(), render).await;
         for (k, px) in frames.iter().enumerate() {
-            let ps = venc.encode(px, i + k as u64)?;
+            let ps = encode(&mut venc, px, i + k as u64)?;
             write_video(&mut mux, ps)?;
         }
         write_audio_until(&mut mux, frame_end_time(end), &mut cursor)?;

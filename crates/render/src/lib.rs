@@ -15,6 +15,7 @@ pub mod color;
 pub mod disk_cache;
 use color::Region;
 pub mod eval;
+pub mod gpu_flags;
 pub mod masks;
 pub mod passes;
 pub mod shapes;
@@ -430,6 +431,31 @@ pub trait Accelerator: Send + Sync {
     /// handled (the CPU renders it).
     fn comp_frame(&self, r: &Renderer, comp: ItemId, t: Tick) -> Option<Image>;
     /// The accelerator implements effect `id` with the CPU effect's semantics.
+    /// Render a top-level comp frame like [`Self::comp_frame`], composite it over `bg` and
+    /// convert it on the device to 8-bit BT.709 limited-range 4:2:0 (the H.264 export's
+    /// input: Y plane, then U and V at half size), delivered to `done` from a later
+    /// [`Self::poll_readbacks`] (`None`: the readback failed). `Err(done)` = not handled.
+    #[allow(clippy::type_complexity)]
+    fn comp_frame_yuv420(
+        &self,
+        _r: &Renderer,
+        _comp: ItemId,
+        _t: Tick,
+        _bg: [f32; 3],
+        done: Box<dyn FnOnce(Option<Vec<u8>>) + Send>,
+    ) -> Result<(), Box<dyn FnOnce(Option<Vec<u8>>) + Send>> {
+        Err(done)
+    }
+    /// Deliver finished asynchronous readbacks ([`Self::comp_frame_yuv420`]); `wait`: block
+    /// briefly for the device.
+    fn poll_readbacks(&self, _wait: bool) {}
+    /// The device behind the accelerator (for export tuning); `None` = unknown.
+    fn adapter_info(&self) -> Option<AdapterInfo> {
+        None
+    }
+    /// Bytes the accelerator may keep in uploaded layer textures and in free working textures
+    /// (export tuning); the default keeps its own.
+    fn set_memory_budgets(&self, _upload: usize, _pool: usize) {}
     fn supports_effect(&self, id: &str) -> bool;
     /// Run a chain of supported effects on `buf`, clamping and quantising to `levels` after
     /// every effect when set (8/16 bpc). `None` = not handled.
@@ -2395,3 +2421,16 @@ mod tests_nested;
 mod tests_paint;
 #[cfg(test)]
 mod tests_time;
+
+/// What an [`Accelerator`] runs on (export tuning).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AdapterInfo {
+    pub name: String,
+    /// PCI vendor id (0x10de NVIDIA, 0x1002 AMD, 0x8086 Intel).
+    pub vendor: u32,
+    /// "DiscreteGpu", "IntegratedGpu", "Cpu" (software adapter), ...
+    pub device_type: String,
+    pub backend: String,
+    pub max_texture_dim: u32,
+    pub max_buffer_bytes: u64,
+}

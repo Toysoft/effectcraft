@@ -2,7 +2,9 @@
 //! guide layers, frame blending, motion blur), field rendering with 3:2 pulldown, colour depth,
 //! the Output Module's crop and resize, alpha handling, storage overflow and the render log.
 
+use std::cell::Cell;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use effectcraft_project::render_queue::{
     AlphaMode, Channels, ColorDepth, CurrentOrOff, EffectsMode, FrameSample, RenderLog, ResizeQuality, SwitchOverride, log_path,
@@ -13,6 +15,8 @@ use effectcraft_render::{Backend, LayerCache, RenderOpts, Renderer};
 use effectcraft_time::Tick;
 use web_time::Instant;
 
+use crate::stream::{Adapt, Claim, Queue};
+use crate::tuning::{CpuWorkers, Plan};
 use crate::{Job, RenderQuality, out};
 
 /// GPU frames rendered at once by default: one, as the export scheduler's single GPU worker
@@ -36,6 +40,16 @@ pub(crate) fn gpu_inflight(var: Option<&str>) -> usize {
             log::warn!(target: "effectcraft_export", "{GPU_INFLIGHT_ENV}={v:?} is not a whole number of frames of at least 1: using {GPU_INFLIGHT_DEFAULT}");
             GPU_INFLIGHT_DEFAULT
         }
+    }
+}
+
+/// Frames in flight per GPU worker of the scheduler: its tuned `per_worker`, capped by
+/// `EFFECTCRAFT_GPU_INFLIGHT` (#879/#1184) when set, which then bounds the GPU frames of all
+/// `workers` together (at least one per worker).
+pub(crate) fn scheduled_inflight(per_worker: usize, workers: usize, var: Option<&str>) -> usize {
+    match var {
+        None => per_worker.max(1),
+        v => per_worker.min((gpu_inflight(v) / workers.max(1)).max(1)).max(1),
     }
 }
 
@@ -78,12 +92,28 @@ pub(crate) struct Cx<'a> {
     /// Processed layer buffers shared by the job's frames, as the viewer's layer cache: static
     /// and transform-only layers render once per job (the GPU compositor then uploads them
     /// once). Dropped with the job.
-    cache: LayerCache,
+    cache: Option<LayerCache>,
     /// (output frame, seconds) of every rendered frame (Plus Per Frame Info logs).
     pub frame_times: Option<Mutex<Vec<(u64, f64)>>>,
     /// Files written to an overflow folder.
     pub overflowed: Mutex<Vec<String>>,
     written: Mutex<Vec<String>>,
+    /// How frames are spread over the compositors ([`crate::tuning`]).
+    pub plan: Plan,
+    /// Every export option, resolved for this job's hardware ([`crate::tuning`]).
+    pub tuning: crate::tuning::ExportTuning,
+    /// Frames of a scheduled plan by the compositor that actually rendered them: the GPU, the
+    /// CPU compositor (CPU workers), or the CPU after the GPU declined (GPU workers).
+    pub gpu_frames: AtomicU64,
+    pub cpu_frames: AtomicU64,
+    pub declined_frames: AtomicU64,
+    /// CPU workers the scheduler ended with.
+    pub cpu_workers: AtomicUsize,
+}
+
+thread_local! {
+    /// Set when the GPU declined a frame this thread asked it for (the CPU rendered it).
+    static DECLINED: Cell<bool> = const { Cell::new(false) };
 }
 
 impl<'a> std::ops::Deref for Cx<'a> {
@@ -128,24 +158,72 @@ impl<'a> Cx<'a> {
         let mut project = job.project.clone();
         apply_overrides(&mut project, job);
         let frame_times = (job.options.log == RenderLog::PlusPerFrameInfo).then(|| Mutex::new(Vec::new()));
-        let cache = LayerCache::default();
+        let tuning = resolve_tuning(job, &project);
+        // A job renders on the project's renderer; Software Only keeps every frame on the
+        // CPU unless the `backend` option forces the GPU.
+        let gpu_job = project.settings.gpu_acceleration || tuning.backend.value == Backend::Gpu;
+        let plan = tuning.plan(job.accel.is_some() && gpu_job);
+        effectcraft_render::gpu_flags::set(tuning.gpu_flags());
+        // The tuned budgets apply to the tuned pipeline, or when the user set them.
+        let budgets_given = tuning.upload_budget_mb.source != crate::tuning::Source::Auto || tuning.pool_budget_mb.source != crate::tuning::Source::Auto;
+        if let Some(a) = job.accel.filter(|_| budgets_given || matches!(plan, Plan::Scheduled { .. })) {
+            a.set_memory_budgets(tuning.upload_budget_mb.value << 20, tuning.pool_budget_mb.value << 20);
+        }
+        for w in &tuning.warnings {
+            log::warn!(target: "effectcraft_export", "{w}");
+        }
+        log::info!(target: "effectcraft_export", "export plan: {plan:?}\n{}", tuning.explain());
+        // the job-wide layer cache, bounded by `cache-mb` (0 = none).
+        let cache = export_cache(tuning.cache_mb.value);
         // With deferred readbacks, buffers computed from a missed pass's placeholders are not kept.
-        cache.set_gate(job.accel.and_then(|a| a.miss_gate()));
-        Cx { job, project, cache, frame_times, overflowed: Mutex::new(vec![]), written: Mutex::new(vec![]) }
+        if let Some(c) = &cache {
+            c.set_gate(job.accel.and_then(|a| a.miss_gate()));
+        }
+        Cx {
+            job,
+            project,
+            cache,
+            frame_times,
+            overflowed: Mutex::new(vec![]),
+            written: Mutex::new(vec![]),
+            plan,
+            tuning,
+            gpu_frames: AtomicU64::new(0),
+            cpu_frames: AtomicU64::new(0),
+            declined_frames: AtomicU64::new(0),
+            cpu_workers: AtomicUsize::new(0),
+        }
     }
 
     pub fn comp(&self) -> Option<&Comp> {
         self.project.comp(self.job.comp)
     }
 
+    /// The backend of frames not handed out by the scheduler.
+    fn backend(&self) -> Backend {
+        match self.plan {
+            Plan::Parallel(b) => b,
+            Plan::Scheduled { .. } => Backend::Auto,
+        }
+    }
+
     /// The renderer of the job's frames: the Render Settings' options, the job's accelerator
-    /// and layer cache.
-    fn renderer(&self) -> Renderer<'_> {
+    /// and layer cache; `backend` Auto = the project's renderer.
+    fn renderer(&self, backend: Backend) -> Renderer<'_> {
         let s = self.job.settings;
         // The whole job renders on the project's renderer (Mercury GPU Acceleration or Software
         // Only), not on whichever compositor Auto timed faster for each frame: the CPU and GPU
         // compositors differ slightly, so a per-frame choice made renders differ run to run.
-        let backend = if self.project.settings.gpu_acceleration { Backend::Gpu } else { Backend::Cpu };
+        let backend = match backend {
+            Backend::Auto => {
+                if self.project.settings.gpu_acceleration {
+                    Backend::Gpu
+                } else {
+                    Backend::Cpu
+                }
+            }
+            b => b,
+        };
         let opts = RenderOpts {
             scale: s.resolution.clamp(0.01, 4.0),
             motion_blur: s.motion_blur_override() != SwitchOverride::OffForAll,
@@ -162,13 +240,31 @@ impl<'a> Cx<'a> {
         let mut r = Renderer::new(&self.project, self.job.footage, opts);
         r.expr = self.job.expr;
         r.accel = self.job.accel;
-        r.cache = Some(&self.cache);
+        r.cache = self.cache.as_ref();
         r
     }
 
-    async fn render_at(&self, t: Tick) -> Image {
+    async fn render_at(&self, t: Tick, backend: Backend) -> Image {
+        let r = self.renderer(backend);
+        let backend = r.opts.backend;
+        // Forced GPU on a native accelerator: ask it directly, so a declined frame (out of
+        // memory, lost device, unsupported) is known; the CPU renders it then, as
+        // `Renderer::comp_frame` does.
+        if backend == Backend::Gpu
+            && self.plan != Plan::Parallel(Backend::Auto)
+            && !self.deferred()
+            && let Some(a) = r.accel
+        {
+            if let Some(img) = a.comp_frame(&r, self.job.comp, t) {
+                return img;
+            }
+            DECLINED.set(true);
+            let why = effectcraft_render::gpu_flags::take_decline().unwrap_or_else(|| "no reason given".into());
+            log::warn!(target: "effectcraft_export", "GPU declined the frame at {:.3} s, rendering it on the CPU: {why}", t.seconds());
+            return r.comp_frame_cpu(self.job.comp, t);
+        }
         // With deferred GPU readbacks (a browser worker) the frame renders in passes.
-        effectcraft_render::passes::comp_frame(&self.renderer(), self.job.comp, t).await
+        effectcraft_render::passes::comp_frame(&r, self.job.comp, t).await
     }
 
     /// Whether frames render in passes (an accelerator with deferred readbacks).
@@ -187,6 +283,15 @@ impl<'a> Cx<'a> {
             }
             return out;
         }
+        if let Plan::Scheduled { .. } = self.plan {
+            let mut out = Vec::with_capacity(ks.len());
+            // Collecting cannot fail.
+            let _ = self.stream(comp, &ks, &f, ks.len(), None, |_, v| {
+                out.push(v);
+                Ok(())
+            });
+            return out;
+        }
         map_frames(ks, self.gpu_cap(), |k| self.frame(comp, k), f)
     }
 
@@ -198,6 +303,279 @@ impl<'a> Cx<'a> {
         (self.job.accel.is_some() && self.project.settings.gpu_acceleration).then(|| gpu_inflight(std::env::var(GPU_INFLIGHT_ENV).ok().as_deref()))
     }
 
+    /// Render output frames `ks` with a [`Plan::Scheduled`] plan, map each with `f` on the
+    /// worker and hand the results to `consume` in order, on this thread, as soon as the next
+    /// one is ready (see [`crate::stream`]). At most `cap` frames are in flight or buffered.
+    /// `consume` failing stops the workers and returns its error.
+    pub fn stream<T: Send>(
+        &self,
+        comp: &Comp,
+        ks: &[u64],
+        f: &(impl Fn(u64, Image) -> T + Sync),
+        cap: usize,
+        direct: Option<&Direct<'_, T>>,
+        mut consume: impl FnMut(u64, T) -> crate::Result<()>,
+    ) -> crate::Result<()> {
+        let Plan::Scheduled { gpu, cpu } = self.plan else { return Err(crate::ExportError::Unsupported("stream without a scheduled plan".into())) };
+        let n = ks.len();
+        let t0 = Instant::now();
+        let (start_cpu, mut adapt) = match cpu {
+            CpuWorkers::Fixed(c) => (c, None),
+            CpuWorkers::Adaptive { max } => {
+                let mut a = Adapt::new(if gpu == 0 { 0 } else { max }, 0.0);
+                if gpu > 0 && max > 0 && n > 16 {
+                    let ms = self.cpu_frame_estimate(comp, ks[0]);
+                    log::info!(target: "effectcraft_export", "adaptive: CPU frame estimate {ms:.0} ms (quarter-size probe x 16)");
+                    a = a.with_cpu_estimate(ms, cap);
+                }
+                (if gpu == 0 { 1 } else { 0 }, Some(a))
+            }
+        };
+        let queue = Queue::<T>::new(n, cap, gpu + cpu.max(), start_cpu);
+        self.cpu_workers.store(start_cpu, Ordering::Relaxed);
+        let q = &queue;
+        // CPU workers share a pool (`cpu-pool`, auto: half the threads): on the whole rayon pool
+        // their intra-frame jobs saturate every core and the memory bus, and the GPU worker's own
+        // CPU stages run 2-4x slower.
+        let knobs = Knobs::from_tuning(&self.tuning);
+        let (gpu_pool, cpu_pool) = (knobs.pool(knobs.gpu_pool, "gpu"), knobs.pool(knobs.cpu_pool, "cpu"));
+        let (gpu_pool, cpu_pool, knobs) = (&gpu_pool, &cpu_pool, &knobs);
+        log::info!(target: "effectcraft_export", "scheduler knobs: {knobs:?}");
+        std::thread::scope(|s| {
+            for w in 0..gpu + cpu.max() {
+                let worker = if w < gpu { None } else { Some(w - gpu) };
+                s.spawn(move || {
+                    let _alive = q.alive();
+                    let pool = if worker.is_none() { gpu_pool } else { cpu_pool };
+                    // Runs on a pool thread when the worker has a pool (its rayon jobs stay in that pool).
+                    let in_pool = |job: &mut (dyn FnMut() + Send)| match pool {
+                        Some(p) => p.install(job),
+                        None => job(),
+                    };
+                    // Render frame `i` the usual way (an Image, mapped by `f`); false: stop.
+                    let normal = |i: usize| -> bool {
+                        let Some(&k) = ks.get(i) else { return false };
+                        let t = Instant::now();
+                        let backend = if worker.is_none() { Backend::Gpu } else { Backend::Cpu };
+                        let mut out = None;
+                        in_pool(&mut || {
+                            DECLINED.set(false);
+                            let img = effectcraft_render::passes::block_on(self.frame_with(comp, k, backend));
+                            out = Some((img, DECLINED.get()));
+                        });
+                        let Some((img, declined)) = out else { return false };
+                        let rendered = t.elapsed().as_secs_f64() * 1e3;
+                        let (what, counter) = match (worker, declined) {
+                            (None, false) => ("gpu", &self.gpu_frames),
+                            (None, true) => ("cpu (gpu declined)", &self.declined_frames),
+                            (Some(_), _) => ("cpu", &self.cpu_frames),
+                        };
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        let who = match worker {
+                            None => format!("gpu worker {w}"),
+                            Some(c) => format!("cpu worker {c}"),
+                        };
+                        let t1 = Instant::now();
+                        let mut v = None;
+                        let mut img = Some(img);
+                        in_pool(&mut || v = img.take().map(|img| f(k, img)));
+                        let Some(v) = v else { return false };
+                        log::info!(target: "effectcraft_export", "frame {k}: {what} ({who}) {rendered:.0} ms + convert {:.0} ms", t1.elapsed().as_secs_f64() * 1e3);
+                        q.put(i, v);
+                                            true
+                    };
+                    let accel = if worker.is_none() { direct.zip(self.job.accel) } else { None };
+                    let Some((d, a)) = accel else {
+                        while let Some(i) = q.claim(worker, gpu) {
+                            if !normal(i) {
+                                break;
+                            }
+                        }
+                        return;
+                    };
+                    // GPU worker with device-side YUV and async readback: submit a frame, claim
+                    // the next while the device renders and copies it; finished frames come
+                    // back through the map callbacks (delivered on device polls).
+                    type Done = (usize, u64, Instant, f64, Option<Vec<u8>>);
+                    let (tx, rx) = std::sync::mpsc::channel::<Done>();
+                    let mut pending = 0usize;
+                    // Frames submitted but not read back yet: each holds its uploads and
+                    // transient textures on the device until it completes (unbounded, 1 worker
+                    // queued 16 frames and 23.7 GB of VRAM).
+                    let async_rb = self.tuning.async_readback.value;
+                    let mut inflight = crate::stream::Inflight::new(if async_rb { scheduled_inflight(self.tuning.gpu_inflight.value, gpu, std::env::var(GPU_INFLIGHT_ENV).ok().as_deref()) } else { 1 });
+                    let deliver = |(i, k, t, rec, bytes): Done| match bytes {
+                        Some(b) => {
+                            let t1 = Instant::now();
+                            let v = (d.map)(k, b);
+                            self.gpu_frames.fetch_add(1, Ordering::Relaxed);
+                            log::info!(target: "effectcraft_export", "frame {k}: gpu yuv420 (gpu worker {w}) record {rec:.0} ms, ready {:.0} ms after start + {:.1} ms", t1.duration_since(t).as_secs_f64() * 1e3, t1.elapsed().as_secs_f64() * 1e3);
+                            q.put(i, v);
+                        }
+                        None => {
+                            log::warn!(target: "effectcraft_export", "frame {k}: GPU readback failed, rendering it again");
+                            let mut out = None;
+                            in_pool(&mut || out = Some(f(k, effectcraft_render::passes::block_on(self.frame_with(comp, k, Backend::Cpu)))));
+                            self.declined_frames.fetch_add(1, Ordering::Relaxed);
+                            if let Some(v) = out {
+                                q.put(i, v);
+                            }
+                        }
+                    };
+                    loop {
+                        while let Ok(done) = rx.try_recv() {
+                            pending -= 1;
+                            deliver(done);
+                        }
+                        if pending >= inflight.limit {
+                            a.poll_readbacks(true);
+                            continue;
+                        }
+                        let c = if pending == 0 { q.claim(worker, gpu).map_or(Claim::Done, Claim::Got) } else { q.try_claim(worker, gpu) };
+                        let i = match c {
+                            Claim::Done => break,
+                            Claim::Full => {
+                                a.poll_readbacks(true);
+                                continue;
+                            }
+                            Claim::Got(i) => i,
+                        };
+                        let Some(&k) = ks.get(i) else { break };
+                        let t = Instant::now();
+                        let mut retried = false;
+                        let started = loop {
+                            let mut started = false;
+                            // The decline reason is thread-local: take it on the thread that recorded.
+                            let mut why = None;
+                            if let FrameSample::Progressive(at) = self.job.settings.sample(comp, k) {
+                                let tx = tx.clone();
+                                in_pool(&mut || {
+                                    let r = self.renderer(Backend::Gpu);
+                                    let rec = t;
+                                    let tx = tx.clone();
+                                    let cb: Box<dyn FnOnce(Option<Vec<u8>>) + Send> = Box::new(move |b| {
+                                        let _ = tx.send((i, k, rec, 0.0, b));
+                                    });
+                                    started = a.comp_frame_yuv420(&r, self.job.comp, at, d.bg, cb).is_ok();
+                                    if !started {
+                                        why = effectcraft_render::gpu_flags::take_decline();
+                                    }
+                                });
+                            }
+                            if started {
+                                break true;
+                            }
+                            match inflight.declined(why.as_deref(), retried) {
+                                crate::stream::OnDecline::Retry { lowered } => {
+                                    if let Some((was, now)) = lowered {
+                                        log::warn!(target: "effectcraft_export", "frame {k}: the GPU ran out of memory with {was} frame(s) in flight; keeping {now} in flight from now on and retrying the frame on the GPU");
+                                    } else {
+                                        log::info!(target: "effectcraft_export", "frame {k}: the GPU ran out of memory; retrying it on the GPU once the frames in flight finish");
+                                    }
+                                    // Let the frames in flight finish and free their memory.
+                                    let t_wait = Instant::now();
+                                    while pending > 0 && t_wait.elapsed().as_secs() < 120 {
+                                        a.poll_readbacks(true);
+                                        while let Ok(done) = rx.try_recv() {
+                                            pending -= 1;
+                                            deliver(done);
+                                        }
+                                    }
+                                    retried = true;
+                                }
+                                crate::stream::OnDecline::Cpu => {
+                                    if let Some(why) = why {
+                                        log::warn!(target: "effectcraft_export", "frame {k}: GPU 4:2:0 path declined ({why}); rendering it the usual way");
+                                    }
+                                    break false;
+                                }
+                            }
+                        };
+                        if started {
+                            pending += 1;
+                            log::debug!(target: "effectcraft_export", "frame {k}: recorded in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+                            a.poll_readbacks(false);
+                            // Synchronous readback (`async-readback off`): wait for this frame.
+                            while !async_rb && pending > 0 {
+                                a.poll_readbacks(true);
+                                while let Ok(done) = rx.try_recv() {
+                                    pending -= 1;
+                                    deliver(done);
+                                }
+                            }
+                        } else if retried {
+                            // Still out of memory with nothing else in flight: the CPU renders
+                            // it (another GPU attempt outside the error scopes would retire the
+                            // device).
+                            log::warn!(target: "effectcraft_export", "frame {k}: the GPU is still out of memory after the retry; rendering it on the CPU");
+                            let mut out = None;
+                            in_pool(&mut || out = Some(f(k, effectcraft_render::passes::block_on(self.frame_with(comp, k, Backend::Cpu)))));
+                            self.declined_frames.fetch_add(1, Ordering::Relaxed);
+                            let Some(v) = out else { break };
+                            q.put(i, v);
+                        } else if !normal(i) {
+                            break;
+                        }
+                    }
+                    let t_end = Instant::now();
+                    while pending > 0 && t_end.elapsed().as_secs() < 120 {
+                        a.poll_readbacks(true);
+                        while let Ok(done) = rx.try_recv() {
+                            pending -= 1;
+                            deliver(done);
+                        }
+                    }
+                });
+            }
+            let mut result = Ok(());
+            let mut got = 0;
+            while let Some((i, v)) = q.next() {
+                got += 1;
+                if let Some(a) = adapt.as_mut() {
+                    let was = a.active;
+                    if let Some((c, fps)) = a.frame(t0.elapsed().as_secs_f64()) {
+                        log::info!(
+                            target: "effectcraft_export",
+                            "adaptive: {fps:.3} frames/s measured with {was} CPU worker(s) -> {c} CPU worker(s){}",
+                            if a.settled { " (settled on the fastest measured)" } else { "" }
+                        );
+                        q.set_cpu_active(c);
+                        self.cpu_workers.store(c, Ordering::Relaxed);
+                    }
+                }
+                if let Some(note) = adapt.as_mut().and_then(Adapt::take_note) {
+                    log::info!(target: "effectcraft_export", "adaptive: {note}");
+                }
+                if let Err(e) = consume(ks.get(i).copied().unwrap_or_default(), v) {
+                    result = Err(e);
+                    break;
+                }
+                if i + 1 == n {
+                    break;
+                }
+            }
+            q.stop();
+            if result.is_ok() && got < n {
+                result = Err(crate::ExportError::Unsupported("a render worker stopped".into()));
+            }
+            result
+        })
+    }
+
+    /// The end-of-render summary of a scheduled plan.
+    pub fn summary(&self, seconds: f64) -> String {
+        let g = self.gpu_frames.load(Ordering::Relaxed);
+        let c = self.cpu_frames.load(Ordering::Relaxed);
+        let d = self.declined_frames.load(Ordering::Relaxed);
+        let n = g + c + d;
+        format!(
+            "render summary: {n} frames in {seconds:.1} s ({:.3} fps): {g} on the GPU, {c} on the CPU compositor, {d} on the CPU after the GPU declined; {} CPU worker(s) at the end ({:?})",
+            n as f64 / seconds.max(1e-9),
+            self.cpu_workers.load(Ordering::Relaxed),
+            self.plan
+        )
+    }
+
     /// Output frame `i`: sampled (fields, pulldown), at the colour depth, cropped and resized.
     pub fn frame(&self, comp: &Comp, i: u64) -> Image {
         effectcraft_render::passes::block_on(self.frame_async(comp, i))
@@ -205,12 +583,33 @@ impl<'a> Cx<'a> {
 
     /// [`Cx::frame`] as a future (deferred readbacks: the frame renders in passes).
     pub async fn frame_async(&self, comp: &Comp, i: u64) -> Image {
+        self.frame_with(comp, i, self.backend()).await
+    }
+
+    /// [`Cx::frame_async`] on `backend`.
+    /// Estimated ms for one CPU-compositor frame: frame `k` rendered at a quarter of the size
+    /// (1/16 of the pixels), times 16.
+    fn cpu_frame_estimate(&self, comp: &Comp, k: u64) -> f64 {
+        let t = match self.job.settings.sample(comp, k) {
+            FrameSample::Progressive(t) => t,
+            FrameSample::Fields { first, .. } => first,
+        };
+        let mut r = self.renderer(Backend::Cpu);
+        r.cache = None;
+        r.accel = None;
+        r.opts.scale *= 0.25;
+        let t0 = Instant::now();
+        let _ = r.comp_frame_cpu(self.job.comp, t);
+        t0.elapsed().as_secs_f64() * 1e3 * 16.0
+    }
+
+    async fn frame_with(&self, comp: &Comp, i: u64, backend: Backend) -> Image {
         let t0 = Instant::now();
         let img = match self.job.settings.sample(comp, i) {
-            FrameSample::Progressive(t) => self.render_at(t).await,
+            FrameSample::Progressive(t) => self.render_at(t, backend).await,
             FrameSample::Fields { first, second, upper_first } => {
-                let a = self.render_at(first).await;
-                if second == first { a } else { interleave(&a, &self.render_at(second).await, upper_first) }
+                let a = self.render_at(first, backend).await;
+                if second == first { a } else { interleave(&a, &self.render_at(second, backend).await, upper_first) }
             }
         };
         let mut img = img;
@@ -593,6 +992,17 @@ mod tests {
     }
 
     #[test]
+    fn the_inflight_cap_bounds_the_scheduler_too() {
+        assert_eq!(scheduled_inflight(3, 1, None), 3);
+        assert_eq!(scheduled_inflight(3, 1, Some("1")), 1);
+        assert_eq!(scheduled_inflight(3, 1, Some("2")), 2);
+        assert_eq!(scheduled_inflight(2, 1, Some("8")), 2, "never above the tuned value");
+        assert_eq!(scheduled_inflight(3, 2, Some("4")), 2);
+        assert_eq!(scheduled_inflight(3, 4, Some("2")), 1, "at least one per worker");
+        assert_eq!(scheduled_inflight(3, 1, Some("junk")), 1, "bad values mean the default (1)");
+    }
+
+    #[test]
     fn gpu_inflight_override_is_a_positive_number_or_the_default() {
         assert_eq!(gpu_inflight(None), GPU_INFLIGHT_DEFAULT);
         assert_eq!(gpu_inflight(Some("3")), 3);
@@ -637,17 +1047,17 @@ mod tests {
         let cx = Cx::new(&job);
         let comp = cx.comp().unwrap();
         cx.frame(comp, 0);
-        let renders = cx.cache.stats().misses;
+        let renders = cx.cache.as_ref().unwrap().stats().misses;
         assert!(renders > 0);
         for i in 1..10 {
             let img = cx.frame(comp, i);
             // The frames are the ones rendered without a cache.
             let t = settings.frame_time(comp, i);
-            let mut uncached = cx.renderer();
+            let mut uncached = cx.renderer(Backend::Auto);
             uncached.cache = None;
             assert_eq!(img.data, uncached.comp_frame(cid, t).data, "frame {i}");
         }
-        let stats = cx.cache.stats();
+        let stats = cx.cache.as_ref().unwrap().stats();
         assert_eq!(stats.misses, renders, "the solid rendered on the first frame only");
         assert!(stats.hits >= 9, "{stats:?}");
     }
@@ -678,5 +1088,75 @@ mod tests {
         assert_eq!(p.data[0], [0.0; 4]);
         assert_eq!(p.data[4][0], 0.0);
         assert_eq!(p.data[5][0], 1.0);
+    }
+}
+
+/// The scheduler's thread options (`gpu-pool`, `cpu-pool`).
+#[derive(Debug, Default)]
+pub(crate) struct Knobs {
+    pub gpu_pool: Option<usize>,
+    pub cpu_pool: Option<usize>,
+}
+
+impl Knobs {
+    pub fn from_tuning(t: &crate::tuning::ExportTuning) -> Knobs {
+        let nz = |n: usize| (n > 0).then_some(n);
+        Knobs { gpu_pool: nz(t.gpu_pool.value), cpu_pool: if t.cpu_frames.value.max() > 0 { nz(t.cpu_pool.value) } else { None } }
+    }
+
+    fn pool(&self, n: Option<usize>, name: &'static str) -> Option<rayon::ThreadPool> {
+        let n = n?;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .thread_name(move |i| format!("export-{name}-{i}"))
+            .build()
+            .map_err(|e| log::warn!(target: "effectcraft_export", "{name} pool: {e}"))
+            .ok()
+    }
+}
+
+/// The export's layer cache ([`Cx::cache`]), `mb` megabytes (0 = none).
+fn export_cache(mb: usize) -> Option<effectcraft_render::LayerCache> {
+    (mb > 0).then(|| effectcraft_render::LayerCache::new(mb << 20))
+}
+
+/// Resolve the export options for `job` (CLI > environment > config > auto, see [`crate::tuning`]).
+fn resolve_tuning(job: &Job, project: &Project) -> crate::tuning::ExportTuning {
+    use crate::tuning::{Source, request, resolve};
+    let req = request();
+    let hw = crate::hw::detect(job.accel, &req.host);
+    let frame = project.comp(job.comp).map(|c| crate::output_size(c, job.settings, job.output)).unwrap_or((1920, 1080));
+    let cfg = req.config.clone().unwrap_or_default();
+    resolve(&hw, frame, [(&req.cli, Source::Cli), (&req.env, Source::Env), (&cfg, Source::Config)])
+}
+
+/// Device-side H.264 input for a GPU worker ([`Cx::stream`]): the accelerator renders the frame,
+/// composites it over `bg` and converts it to 8-bit 4:2:0, read back asynchronously; `map`
+/// turns the planes into the stream's item.
+pub struct Direct<'d, T> {
+    pub bg: [f32; 3],
+    #[allow(clippy::type_complexity)]
+    pub map: &'d (dyn Fn(u64, Vec<u8>) -> T + Sync),
+}
+
+impl Cx<'_> {
+    /// Whether frames of `comp` can take the [`Direct`] path at output size `w`×`h`: a GPU
+    /// worker, a native accelerator, no depth quantising, crop or resize (the rendered frame
+    /// is the encoded one), even sizes the kernel covers. `rendered`: frame 0's size.
+    pub fn yuv_direct_ok(&self, w: u32, h: u32, rendered: Option<(u32, u32)>) -> bool {
+        let Plan::Scheduled { gpu, .. } = self.plan else { return false };
+        let s = self.job.settings;
+        let om = self.job.output;
+        let quantised = s.color_depth != ColorDepth::Current && s.color_depth.resolve(self.project.settings.bit_depth).levels().is_some();
+        gpu > 0
+            && self.job.accel.is_some()
+            && !self.deferred()
+            && !quantised
+            && !om.resize.enabled
+            && om.crop.edges(w, h, s.resolution.clamp(0.01, 4.0)) == (0, 0, 0, 0)
+            && rendered == Some((w, h))
+            && w.is_multiple_of(8)
+            && h.is_multiple_of(2)
+            && self.tuning.gpu_yuv.value
     }
 }

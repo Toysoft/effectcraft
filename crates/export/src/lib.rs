@@ -34,8 +34,11 @@
 
 mod encode;
 mod hevc_av1;
+mod hw;
 mod out;
 mod pipeline;
+mod stream;
+pub mod tuning;
 mod uncompressed;
 mod webm;
 mod webm_av1;
@@ -174,12 +177,20 @@ pub fn export(job: &Job, progress: &mut dyn FnMut(&Progress) -> bool) -> Result<
 pub async fn export_async(job: &Job<'_>, progress: &mut dyn FnMut(&Progress) -> bool) -> Result<Report> {
     let t0 = Instant::now();
     let cx = Cx::new(job);
+    if tuning::request().print_only {
+        // `--print-tuning`: show the resolved options and render nothing.
+        println!("{}", cx.tuning.explain());
+        return Err(ExportError::Cancelled);
+    }
     let mut r = export_with(&cx, progress, t0).await;
     if matches!(r, Err(ExportError::Cancelled)) {
         cx.remove_cancelled_outputs()?;
         return r;
     }
     let log = cx.write_log(&r, t0.elapsed().as_secs_f64());
+    if let tuning::Plan::Scheduled { .. } = cx.plan {
+        log::info!(target: "effectcraft_export", "{}", cx.summary(t0.elapsed().as_secs_f64()));
+    }
     if let Ok(rep) = &mut r {
         rep.log = log;
         rep.overflow = cx.overflowed.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -229,9 +240,15 @@ impl State<'_> {
     }
 }
 
-/// Frames per parallel batch.
-pub(crate) fn batch_size() -> u64 {
-    rayon::current_num_threads().clamp(2, 16) as u64
+/// Frames per parallel batch. A scheduled plan takes larger batches, so the GPU and CPU workers
+/// meet at a batch boundary less often.
+pub(crate) fn batch_size(cx: &Cx) -> u64 {
+    let n = rayon::current_num_threads().clamp(2, 16) as u64;
+    match cx.plan {
+        tuning::Plan::Scheduled { gpu, cpu } => n.max(8 * (gpu + cpu.max()) as u64).min(48),
+        // Stock: a frame per thread; fewer when the RAM budget says so (`cpu-batch`).
+        tuning::Plan::Parallel(_) => n.min(cx.tuning.cpu_batch.value.max(1) as u64),
+    }
 }
 
 /// Crop/pad 8-bit RGBA to `w`×`h` (codec rounding).
@@ -259,7 +276,7 @@ async fn sequence(cx: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut State<'_>) 
         Channels::Rgba if !fmt.supports_alpha() => Channels::Rgb,
         c => c,
     };
-    let batch = batch_size();
+    let batch = batch_size(cx);
     let mut bytes = 0u64;
     let mut i = 0;
     while i < st.total {
@@ -369,7 +386,7 @@ async fn gif_export(job: &Cx<'_>, comp: &Comp, w: u32, h: u32, st: &mut State<'_
     let cs_per_frame = 100.0 * rate.den as f64 / rate.num as f64;
     let mut clock = 0.0f64;
     let mut emitted = 0u64;
-    let batch = batch_size();
+    let batch = batch_size(job);
     let mut i = 0;
     while i < st.total {
         let end = (i + batch).min(st.total);
