@@ -761,6 +761,40 @@ fn mask_path(h: &Harness<'_, EffectcraftApp>, name: &str) -> effectcraft_engine:
     l.masks().unwrap().groups().next().unwrap().get("path").unwrap().value.as_path().unwrap().clone()
 }
 
+/// #1544: a Shift-click with the Pen puts the next point straight below, beside or diagonal to the
+/// one before it; without Shift it goes where it was clicked.
+#[test]
+fn pen_shift_click_draws_a_straight_segment() {
+    let mut h = harness();
+    let plate = layer_id(&h, "Plate");
+    h.state_mut().session.execute("layer.select", json!({"layers": [plate]})).unwrap();
+    h.state_mut().session.execute("view.snapping", json!({"value": false})).unwrap();
+    h.state_mut().ui.tool = Tool::Pen;
+    h.run_steps(2);
+    let first = screen(&h, [100.0, 60.0]);
+    click(&mut h, first);
+    let shift_click = |h: &mut Harness<'_, EffectcraftApp>, p: Pos2| {
+        let shift = egui::Modifiers::SHIFT;
+        h.input_mut().events.push(Event::ModifiersChanged(shift));
+        h.input_mut().events.push(Event::PointerMoved(p));
+        h.step();
+        h.input_mut().events.push(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: shift });
+        h.step();
+        h.input_mut().events.push(Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: shift });
+        h.input_mut().events.push(Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.run_steps(2);
+    };
+    let down = screen(&h, [112.0, 250.0]);
+    shift_click(&mut h, down);
+    let free = screen(&h, [300.0, 290.0]);
+    click(&mut h, free);
+    let drawn = mask_path(&h, "Plate");
+    let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1.0 && (a[1] - b[1]).abs() < 1.0;
+    assert_eq!(drawn.vertices.len(), 3, "{drawn:?}");
+    assert!(near(drawn.vertices[1], [100.0, 250.0]), "straight down: {drawn:?}");
+    assert!(near(drawn.vertices[2], [300.0, 290.0]), "no Shift, no constraint: {drawn:?}");
+}
+
 /// Drawing a mask with the Pen, moving a point and undoing take one action back per undo; a
 /// double-click on a point selects all of them in a free-transform box, and dragging inside it
 /// (or, once the box is gone, dragging a point) moves the whole mask (#290).
