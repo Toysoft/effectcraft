@@ -394,11 +394,16 @@ impl Cff {
         let private = |pd: &[(u16, Vec<f64>)]| -> (Vec<std::ops::Range<usize>>, (f64, f64)) {
             let Some(pv) = get(pd, 18).filter(|v| v.len() == 2) else { return (vec![], (0.0, 0.0)) };
             let (size, off) = (pv[0] as usize, pv[1] as usize);
-            let Some(bytes) = d.get(off..off + size) else { return (vec![], (0.0, 0.0)) };
+            let Some(bytes) = off.checked_add(size).and_then(|end| d.get(off..end)) else { return (vec![], (0.0, 0.0)) };
             let pr = dict(bytes);
             let nominal = get(&pr, 21).and_then(|v| v.first().copied()).unwrap_or(0.0);
             let default = get(&pr, 20).and_then(|v| v.first().copied()).unwrap_or(0.0);
-            let subrs = get(&pr, 19).and_then(|v| v.first().copied()).and_then(|s| index(d, off + s as usize)).map(|x| x.0).unwrap_or_default();
+            let subrs = get(&pr, 19)
+                .and_then(|v| v.first().copied())
+                .and_then(|s| off.checked_add(s as usize))
+                .and_then(|p| index(d, p))
+                .map(|x| x.0)
+                .unwrap_or_default();
             (subrs, (default, nominal))
         };
         let mut lsubrs = vec![];
@@ -1047,5 +1052,63 @@ mod tests {
         assert_eq!(w, 600.0);
         assert!((p.area().abs() - 250_000.0).abs() < 1e-6, "{}", p.area());
         assert_eq!(p.bounding_box(), kurbo::Rect::new(50.0, 0.0, 550.0, 500.0));
+    }
+
+    /// A CFF whose top DICT points its Private DICT at offsets near `usize::MAX`: `size` and `off`
+    /// come from the file, and reading the Private DICT must not overflow `off + size`.
+    #[test]
+    fn huge_private_dict_offsets_do_not_overflow() {
+        fn idx(items: &[Vec<u8>]) -> Vec<u8> {
+            let mut out = (items.len() as u16).to_be_bytes().to_vec();
+            if items.is_empty() {
+                return out;
+            }
+            out.push(4);
+            let mut off = 1u32;
+            out.extend_from_slice(&off.to_be_bytes());
+            for it in items {
+                off += it.len() as u32;
+                out.extend_from_slice(&off.to_be_bytes());
+            }
+            for it in items {
+                out.extend_from_slice(it);
+            }
+            out
+        }
+        let int = |v: i32| {
+            let mut o = vec![29];
+            o.extend_from_slice(&v.to_be_bytes());
+            o
+        };
+        // The BCD real "1E300": a size and an offset that both saturate at `usize::MAX`.
+        let huge = vec![0x1E, 0x1B, 0x30, 0x0F];
+        let header = [1u8, 0, 4, 4];
+        let names = idx(&[b"Test".to_vec()]);
+        let strings = idx(&[]);
+        let gsubrs = idx(&[]);
+        let charset = vec![0u8];
+        let cs = idx(&[vec![14]]); // one `.notdef` charstring: endchar
+        let top_len = 5 + 1 + 5 + 1 + huge.len() * 2 + 1;
+        let top_index_len = 2 + 1 + 8 + top_len;
+        let base = header.len() + names.len() + top_index_len + strings.len() + gsubrs.len();
+        let cs_off = base + charset.len();
+        let mut top = vec![];
+        top.extend(int(0));
+        top.push(15); // charset: ISOAdobe
+        top.extend(int(cs_off as i32));
+        top.push(17); // CharStrings
+        top.extend(&huge);
+        top.extend(&huge);
+        top.push(18); // Private: [size, offset]
+        assert_eq!(top.len(), top_len);
+        let mut out = header.to_vec();
+        out.extend(names);
+        out.extend(idx(&[top]));
+        out.extend(strings);
+        out.extend(gsubrs);
+        out.extend(charset);
+        out.extend(cs);
+        let cff = Cff::parse(&out).expect("the damaged Private DICT is skipped, the font parses");
+        assert_eq!(cff.glyph_count(), 1);
     }
 }
