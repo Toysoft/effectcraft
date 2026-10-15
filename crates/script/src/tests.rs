@@ -1375,3 +1375,42 @@ fn scripted_levels_alpha_controls_resolve_from_the_effect() {
     );
     assert_eq!(o.result, json!([0.5, 0.5]));
 }
+
+/// After Effects resolves the Transform properties and Source Text from the layer itself, without
+/// naming their group: `layer.property("Position")` (#1348).
+#[test]
+fn layer_property_resolves_transform_and_source_text_shortcuts() {
+    let mut s = session();
+    let o = ok(
+        &mut s,
+        r#"
+        var c = app.project.items.addComp("x", 100, 100, 1, 5, 30);
+        var t = c.layers.addText("hi");
+        var s = c.layers.addSolid([1, 0, 0], "s", 100, 100, 1);
+        var listed = [t.property("Source Text"), s.property("Position"), s.property("Opacity"), s.property("Scale")].join(", ");
+        s.property("Position").setValue([30, 40]);
+        s.property("Opacity").setValue(25);
+        t.property("Source Text").setValue("bye");
+        s.threeDLayer = true;
+        [listed, s.property("Position").value[0], s.property("Opacity").value, t.property("Source Text").value.text,
+         s.property("ADBE Position").matchName, s("Anchor Point").matchName, s.property("Rotation").matchName,
+         s.property("X Rotation").matchName, s.property("Orientation").matchName]
+        "#,
+    );
+    assert_eq!(
+        o.result,
+        json!([
+            "[object Property], [object Property], [object Property], [object Property]",
+            30,
+            25,
+            "bye",
+            "ADBE Position",
+            "ADBE Anchor Point",
+            "ADBE Rotate Z",
+            "ADBE Rotate X",
+            "ADBE Orientation"
+        ])
+    );
+    let (_, c) = comp_named(&s, "x");
+    assert_eq!(layer(c, "s").props.prop("transform/opacity").unwrap().value, KV::Scalar(25.0));
+}
