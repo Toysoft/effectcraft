@@ -269,7 +269,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(paths.contains(&d.join("Job/shots/a.png").to_string_lossy().to_string()), "{paths:?}");
+        // Stored paths use portable separators; compare locations rather than their spelling.
+        assert!(paths.iter().any(|p| std::path::Path::new(p) == d.join("Job/shots/a.png")), "{paths:?}");
         assert!(!o.is_dirty(), "finding the files is not an edit");
         let _ = std::fs::remove_dir_all(d);
     }
