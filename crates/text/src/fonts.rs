@@ -577,12 +577,25 @@ fn script_of(c: char) -> FallbackScript {
 /// Families usually installed for each CJK language, in the order the platforms' own fallback
 /// tables prefer them (Windows, macOS, then the Linux/Noto names). Missing ones cost one name
 /// lookup each.
+///
+/// A screen face comes before its print sibling. Windows keeps two faces per family - `Meiryo UI`
+/// and `Meiryo`, `Yu Gothic UI` and `Yu Gothic`, `Microsoft YaHei UI` and `Microsoft YaHei`,
+/// `Microsoft JhengHei UI` and `Microsoft JhengHei` - and its own link table for `Segoe UI`
+/// (`FontLink\SystemLink` in the registry) picks the UI one: at 12 px the print face is lighter and
+/// less hinted than what the platform draws its own interface with. `MS UI Gothic` and `PMingLiU`
+/// are the same pair for `MS Gothic` and `MingLiU`.
+///
+/// This holds where the platform ships a screen sibling at all: macOS has none for `PingFang SC`/
+/// `PingFang TC`, so the rule is not a general ordering law, and each list keeps its own platform
+/// order around it.
 const JAPANESE_FAMILIES: &[&str] = &[
-    "Yu Gothic",
-    "Meiryo",
-    "BIZ UDPGothic",
-    "MS Gothic",
+    "Meiryo UI",
     "Yu Gothic UI",
+    "Meiryo",
+    "Yu Gothic",
+    "BIZ UDPGothic",
+    "MS UI Gothic",
+    "MS Gothic",
     "Hiragino Sans",
     "Hiragino Kaku Gothic ProN",
     "Noto Sans CJK JP",
@@ -595,13 +608,23 @@ const JAPANESE_FAMILIES: &[&str] = &[
 /// Han ideograph families for Simplified Chinese, in the order the platforms' own fallback tables
 /// prefer them (Windows, macOS, then the Linux/Noto names). Missing ones cost one name lookup each.
 const SIMPLIFIED_CHINESE_FAMILIES: &[&str] =
-    &["Microsoft YaHei", "SimSun", "PingFang SC", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Micro Hei"];
+    &["Microsoft YaHei UI", "Microsoft YaHei", "SimSun", "PingFang SC", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "WenQuanYi Micro Hei"];
 /// The same for Traditional Chinese. The two scripts share almost all of their code points but not
 /// the glyph forms (`东` against `東`'s neighbours, `直`, `骨`), so one list for both drew a
 /// Traditional interface with Simplified forms - the faces do not differ in *coverage*, which is
 /// what the fallback search checks, so the script has to pick the list.
-const TRADITIONAL_CHINESE_FAMILIES: &[&str] =
-    &["Microsoft JhengHei", "MingLiU", "PingFang TC", "Heiti TC", "Hiragino Sans CNS", "Noto Sans CJK TC", "Noto Sans TC", "Source Han Sans TC"];
+const TRADITIONAL_CHINESE_FAMILIES: &[&str] = &[
+    "Microsoft JhengHei UI",
+    "Microsoft JhengHei",
+    "PMingLiU",
+    "MingLiU",
+    "PingFang TC",
+    "Heiti TC",
+    "Hiragino Sans CNS",
+    "Noto Sans CJK TC",
+    "Noto Sans TC",
+    "Source Han Sans TC",
+];
 const KOREAN_FAMILIES: &[&str] = &["Malgun Gothic", "Gulim", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR", "Source Han Sans KR", "NanumGothic"];
 /// The platforms' plain text families for the other scripts the bundled fonts lack, in the same
 /// order (Windows, macOS, then the Linux/Noto names).
@@ -1142,6 +1165,21 @@ mod tests {
         assert_eq!(families_for(FallbackScript::Han), chinese_families_for(&active_cjk_locale()));
         // Han text is the only thing these lists serve; the Japanese order does not change.
         assert_eq!(han_order_for("ja_JP.UTF-8")[0], FallbackScript::Japanese);
+    }
+
+    #[test]
+    fn screen_faces_come_before_their_print_siblings() {
+        // Windows' own link table for `Segoe UI` (`FontLink\SystemLink`) picks the UI face over the
+        // print one, and so should the interface: same coverage, better hinting at interface sizes.
+        // Only the Windows pairs are pinned: the rule is "where the platform has a screen variant",
+        // and macOS ships no UI sibling for `PingFang SC`/`PingFang TC`.
+        let pos = |list: &[&str], name: &str| list.iter().position(|f| *f == name).unwrap_or_else(|| panic!("{name} is not in the list: {list:?}"));
+        for (screen, print) in [("Meiryo UI", "Meiryo"), ("Yu Gothic UI", "Yu Gothic"), ("MS UI Gothic", "MS Gothic")] {
+            assert!(pos(JAPANESE_FAMILIES, screen) < pos(JAPANESE_FAMILIES, print), "{screen} must come before {print}");
+        }
+        assert!(pos(SIMPLIFIED_CHINESE_FAMILIES, "Microsoft YaHei UI") < pos(SIMPLIFIED_CHINESE_FAMILIES, "Microsoft YaHei"));
+        assert!(pos(TRADITIONAL_CHINESE_FAMILIES, "Microsoft JhengHei UI") < pos(TRADITIONAL_CHINESE_FAMILIES, "Microsoft JhengHei"));
+        assert!(pos(TRADITIONAL_CHINESE_FAMILIES, "PMingLiU") < pos(TRADITIONAL_CHINESE_FAMILIES, "MingLiU"));
     }
 
     #[test]
