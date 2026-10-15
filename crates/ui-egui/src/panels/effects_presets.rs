@@ -288,6 +288,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     app.auto.add("effects.menu", mr, "Effects & Presets options");
     let view = app.ui.effects_view.clone();
     let mark = |on: bool, l: &str| if on { format!("✓ {l}") } else { format!("    {l}") };
+    let copy_label = format!("    {}", tr("Copy Presets Folder Path"));
     let menu = vec![
         mark(view.depth == "all", "Show Effects for All Color Depths"),
         mark(view.depth == "32", "Show 32 bpc Effects Only"),
@@ -301,7 +302,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         "    Refresh List".into(),
         "    Clear Recently Used".into(),
         "-".into(),
-        format!("    {}", tr("Copy Presets Folder Path")),
+        copy_label.clone(),
     ];
     let mut force_scan = false;
     let separators = menu.iter().filter(|label| *label == "-").count();
@@ -314,7 +315,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     ui.separator();
                 } else {
                     let resp = ui.selectable_label(false, label);
-                    if i == 12 {
+                    if label == &copy_label {
                         app.auto.add("effects.copyPresetsFolderPath", resp.rect, "Copy Presets Folder Path");
                     }
                     if resp.clicked() {
@@ -330,6 +331,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     if let Some(i) = choice {
         let v = &mut app.ui.effects_view;
         match i {
+            i if menu.get(i) == Some(&copy_label) => {
+                if let Err(e) = crate::menus::invoke(app, &ctx, "effects.copyPresetsFolderPath", json!({})) {
+                    app.ui.status = e;
+                }
+            }
             0 => v.depth = "all".into(),
             1 => v.depth = "32".into(),
             2 => v.depth = "gpu".into(),
@@ -338,11 +344,6 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             7 => v.alphabetical = true,
             9 => force_scan = true,
             10 => app.ui.effects_recent.clear(),
-            12 => {
-                if let Err(e) = crate::menus::invoke(app, &ctx, "effects.copyPresetsFolderPath", json!({})) {
-                    app.ui.status = e;
-                }
-            }
             _ => {}
         }
     }

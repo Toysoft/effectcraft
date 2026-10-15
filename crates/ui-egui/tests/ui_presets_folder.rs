@@ -34,26 +34,29 @@ fn click(h: &mut Harness<'_, EffectcraftApp>, id: &str) -> Vec<String> {
 #[test]
 fn presets_menu_copies_the_configured_folder_without_editing_the_project() {
     let expected = expected_folder();
-    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(|_| {
-        let mut app = EffectcraftApp::new(Session::default());
-        app.ui.start_screen = false;
-        app.show_panel(PanelKind::EffectsPresets);
-        app
-    });
-    h.run_steps(3);
-    let before = serde_json::to_value(&h.state().session.project).unwrap();
-    let revision = h.state().session.revision;
-    assert!(h.state().auto.find("effects.copyPresetsFolderPath").is_none());
-    click(&mut h, "effects.menu");
-    h.run_steps(3);
-    if let Ok(path) = std::env::var("PRESETS_FOLDER_SNAPSHOT") {
-        h.render().unwrap().save(path).unwrap();
+    for language in ["en", "ja"] {
+        let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(|_| {
+            let mut app = EffectcraftApp::new(Session::default());
+            app.session.prefs.general.language = language.into();
+            app.ui.start_screen = false;
+            app.show_panel(PanelKind::EffectsPresets);
+            app
+        });
+        h.run_steps(3);
+        let before = serde_json::to_value(&h.state().session.project).unwrap();
+        let revision = h.state().session.revision;
+        assert!(h.state().auto.find("effects.copyPresetsFolderPath").is_none());
+        click(&mut h, "effects.menu");
+        h.run_steps(3);
+        if let Ok(path) = std::env::var("PRESETS_FOLDER_SNAPSHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
+        assert_eq!(click(&mut h, "effects.copyPresetsFolderPath"), [expected.as_str()]);
+        h.run_steps(2);
+        assert!(h.state().auto.find("effects.copyPresetsFolderPath").is_none());
+        assert_eq!(serde_json::to_value(&h.state().session.project).unwrap(), before);
+        assert_eq!(h.state().session.revision, revision);
     }
-    assert_eq!(click(&mut h, "effects.copyPresetsFolderPath"), [expected]);
-    h.run_steps(2);
-    assert!(h.state().auto.find("effects.copyPresetsFolderPath").is_none());
-    assert_eq!(serde_json::to_value(&h.state().session.project).unwrap(), before);
-    assert_eq!(h.state().session.revision, revision);
 }
 
 #[test]
