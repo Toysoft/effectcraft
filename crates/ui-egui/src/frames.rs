@@ -40,7 +40,7 @@ const MAX_KEEPERS: usize = 64;
 /// GPU frames kept for RAM preview (bytes of video memory) at first. wgpu can't tell how much
 /// video memory there is: each time the device runs out, the budget halves (to
 /// [`MIN_GPU_BUDGET`]) and the frame renders on the CPU (#106).
-const GPU_BUDGET: usize = 1 << 30;
+const GPU_BUDGET: usize = if cfg!(target_os = "ios") { 128 << 20 } else { 1 << 30 };
 const MIN_GPU_BUDGET: usize = 64 << 20;
 
 /// A rendered viewer frame: CPU pixels or a GPU texture.
@@ -460,7 +460,7 @@ pub struct Frames {
 impl Default for Frames {
     fn default() -> Self {
         #[cfg(not(target_arch = "wasm32"))]
-        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 16);
+        let threads = if cfg!(target_os = "ios") { 2 } else { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 16) };
         Frames {
             cache: Arc::new(Mutex::new(Cache { map: HashMap::new(), order: VecDeque::new(), bytes: 0, gpu_bytes: 0, budget: 3 << 30, gpu_budget: GPU_BUDGET, playhead: None })),
             inflight: Arc::new(Mutex::new(HashSet::new())),

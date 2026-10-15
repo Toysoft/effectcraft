@@ -20,6 +20,9 @@ use crate::{Dialog, EffectcraftApp};
 pub fn open(app: &mut EffectcraftApp, page: &str) {
     if app.dialog != Some(Dialog::Settings) {
         app.dialog_state.prefs_snapshot = Some(app.session.prefs.clone());
+        if let Some(display) = &mut app.hooks.display_preferences {
+            display.opened();
+        }
     }
     app.dialog_state.settings_page = page.to_string();
     app.dialog = Some(Dialog::Settings);
@@ -696,6 +699,11 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
                 ui.add_space(6.0);
                 egui::ScrollArea::vertical().max_height((body_h - 30.0).max(0.0)).auto_shrink([false, false]).show(ui, |ui| {
                     page_ui(app, ui, p, &cur, t, &mut acts);
+                    if p.id == "appearance"
+                        && let Some(display) = &mut app.hooks.display_preferences
+                    {
+                        display.show(ui, &mut app.auto);
+                    }
                 });
             });
         }
@@ -748,12 +756,18 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         }
     }
     if cancel {
+        if let Some(display) = &mut app.hooks.display_preferences {
+            display.closed(false, &mut app.session);
+        }
         if let Some(p) = app.dialog_state.prefs_snapshot.take() {
             app.session.prefs = p;
             app.session.prefs_changed();
         }
         app.dialog = None;
     } else if ok {
+        if let Some(display) = &mut app.hooks.display_preferences {
+            display.closed(true, &mut app.session);
+        }
         app.dialog_state.prefs_snapshot = None;
         app.session.save_prefs();
         app.dialog = None;

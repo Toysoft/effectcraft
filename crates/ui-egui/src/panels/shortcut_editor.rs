@@ -82,7 +82,7 @@ pub fn combo_text(m: egui::Modifiers, k: egui::Key) -> Option<String> {
         _ => k.name(),
     };
     let mut s = String::new();
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
         if m.ctrl {
             s.push_str("Ctrl+");
         }
@@ -175,9 +175,9 @@ fn keyboard_rows() -> Vec<Vec<(&'static str, &'static str, f32)>> {
     }
     r.extend([(",", ",", 1.0), (".", ".", 1.0), ("/", "/", 1.0), ("Shift", "#shift", 2.3)]);
     rows.push(r);
-    let (cmd, alt) = if cfg!(target_os = "macos") { ("⌘ Cmd", "⌥ Opt") } else { ("Ctrl", "Alt") };
+    let (cmd, alt) = if cfg!(any(target_os = "macos", target_os = "ios")) { ("⌘ Cmd", "⌥ Opt") } else { ("Ctrl", "Alt") };
     rows.push(vec![
-        ("Ctrl", if cfg!(target_os = "macos") { "#ctrl" } else { "#cmd" }, 1.4),
+        ("Ctrl", if cfg!(any(target_os = "macos", target_os = "ios")) { "#ctrl" } else { "#cmd" }, 1.4),
         (alt, "#alt", 1.4),
         (cmd, "#cmd", 1.6),
         ("Space", "Space", 6.0),
@@ -232,7 +232,7 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::Enter));
     // Modifiers: toggles, or the ones held on the keyboard.
     let held = ctx.input(|i| i.modifiers);
-    let held = [held.ctrl && cfg!(target_os = "macos"), held.command, held.alt, held.shift];
+    let held = [held.ctrl && cfg!(any(target_os = "macos", target_os = "ios")), held.command, held.alt, held.shift];
     let mods = if held.iter().any(|m| *m) && !st.recording { held } else { st.mods };
 
     let table = app.session.shortcuts().clone();
@@ -316,7 +316,8 @@ pub fn show(app: &mut EffectcraftApp, ctx: &egui::Context, t: &Tokens) {
         // ---- modifiers + legend
         ui.horizontal(|ui| {
             ui.label(tr("Modifiers:"));
-            let names = if cfg!(target_os = "macos") { ["⌃ Ctrl", "⌘ Cmd", "⌥ Opt", "⇧ Shift"] } else { ["", "Ctrl", "Alt", "Shift"] };
+            let names =
+                if cfg!(any(target_os = "macos", target_os = "ios")) { ["⌃ Ctrl", "⌘ Cmd", "⌥ Opt", "⇧ Shift"] } else { ["", "Ctrl", "Alt", "Shift"] };
             for (i, (n, id)) in names.iter().zip(["ctrl", "cmd", "alt", "shift"]).enumerate() {
                 if n.is_empty() {
                     continue;

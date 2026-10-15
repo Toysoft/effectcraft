@@ -181,7 +181,7 @@ page!(Appearance {
     /// User interface brightness, -1 (darker) … 1 (lighter).
     brightness: f64 = 0.0,
     /// The size of the whole interface in percent (75–200), on top of the display's own scale.
-    ui_scale: u32 = 100,
+    ui_scale: u32 = if cfg!(target_os = "ios") { 60 } else { 100 },
     use_label_color_for_handles: bool = true,
     use_label_color_for_tabs: bool = true,
     cycle_mask_colors: bool = true,
@@ -631,7 +631,7 @@ impl Prefs {
             _ => {}
         }
         self.appearance.brightness = self.appearance.brightness.clamp(-1.0, 1.0);
-        self.appearance.ui_scale = self.appearance.ui_scale.clamp(75, 200);
+        self.appearance.ui_scale = self.appearance.ui_scale.clamp(if cfg!(target_os = "ios") { 25 } else { 75 }, 200);
         let defaults = default_labels();
         self.labels.truncate(defaults.len());
         for d in defaults.iter().skip(self.labels.len()) {
@@ -794,6 +794,11 @@ impl Prefs {
         let (mut l, mut m, mut p) = (self.layer_cache_bytes() as u64, self.media_cache_bytes() as u64, self.preview_cache_bytes() as u64);
         if web {
             (l, m) = (l.min(WEB_LAYER_CACHE), m.min(WEB_MEDIA_CACHE));
+        }
+        if cfg!(target_os = "ios") {
+            // UIKit can terminate an app under memory pressure. Keep mobile cache ceilings
+            // effective even after a user loads settings copied from a desktop installation.
+            (l, m, p) = (l.min(128 << 20), m.min(128 << 20), p.min(256 << 20));
         }
         let floor = 64u64 << 20;
         let mut capped = false;
@@ -1234,7 +1239,7 @@ pub fn pages() -> Vec<Page> {
                 s("appearance.lightTheme", "Light Theme", Kind::Choice(LIGHT_THEMES), true),
                 s("appearance.darkTheme", "Dark Theme", Kind::Choice(DARK_THEMES), true),
                 s("appearance.brightness", "Brightness", Kind::Slider(-1.0, 1.0), true),
-                s("appearance.uiScale", "UI Scale", Kind::Int(75, 200, "%"), true),
+                s("appearance.uiScale", "UI Scale", Kind::Int(if cfg!(target_os = "ios") { 25 } else { 75 }, 200, "%"), true),
                 Section("Labels and Colors"),
                 s("appearance.useLabelColorForHandles", "Use Label Color for Layer Handles and Paths", B, true),
                 s("appearance.useLabelColorForTabs", "Use Label Color for Related Tabs", B, true),
