@@ -21,7 +21,9 @@ Pixels come from decompressed sensor samples, with CFA demosaicing (PPG), black 
 white-level normalization, clip-aware highlight reconstruction, as-shot white balance,
 camera-to-Rec.2020 colour conversion, conversion to linear sRGB, then EXIF orientation.
 EffectCraft receives opaque float RGBA,
-sRGB-encoded by default, with negative values and highlight headroom retained. Interpret
+sRGB-encoded by default, with negative values and highlight headroom retained. Working Gamma
+2.4 uses the same float-footage transfer as other linear float stills, with a separate cached frame.
+Interpret
 Footage > Preserve RGB keeps the developed linear-sRGB values, like float still footage.
 
 LightCraft's spectral camera matrices are used when the camera is in its calibration table.

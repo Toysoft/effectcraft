@@ -247,6 +247,30 @@ mod tests {
     }
 
     #[test]
+    fn working_gamma_and_preserve_rgb_use_distinct_cached_frames() {
+        use effectcraft_render::{FloatCurve, FootageSource};
+
+        let bytes: Arc<[u8]> = arw(16, 12, 1, 1).into();
+        let f = crate::probe_bytes("working-gamma.ARW", bytes.clone()).unwrap();
+        let pool = crate::MediaPool::new();
+        pool.add_bytes(&f.path, bytes);
+        let item = effectcraft_project::ItemId(0);
+        let linear = pool.frame_with(item, &f, Tick::ZERO, None, FloatCurve::Linear).unwrap();
+        let gamma = pool.frame_with(item, &f, Tick::ZERO, None, FloatCurve::Gamma24).unwrap();
+        let srgb = pool.frame_with(item, &f, Tick::ZERO, None, FloatCurve::Srgb).unwrap();
+        assert!(!Arc::ptr_eq(&linear, &gamma));
+        assert!(!Arc::ptr_eq(&srgb, &gamma));
+        for channel in 0..3 {
+            let v = linear.get(4, 4)[channel];
+            assert!((gamma.get(4, 4)[channel] - v.abs().powf(1.0 / 2.4).copysign(v)).abs() < 1e-6);
+        }
+        let again = pool.frame_with(item, &f, Tick::ZERO, None, FloatCurve::Gamma24).unwrap();
+        assert!(Arc::ptr_eq(&gamma, &again));
+        let preserve = pool.frame_with(item, &Footage { preserve_rgb: true, ..f }, Tick::ZERO, None, FloatCurve::Gamma24).unwrap();
+        assert_eq!(preserve.get(4, 4), linear.get(4, 4));
+    }
+
+    #[test]
     fn sensor_import_uses_full_dimensions_orientation_and_frame_cache() {
         let bytes: Arc<[u8]> = arw(16, 12, 6, 1).into();
         let f = crate::probe_bytes("test.ARW", bytes.clone()).unwrap();
