@@ -204,3 +204,8 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# EffectCraft patch (#613): wgpu-hal 30.0.1 + DXC IEEE strictness (-Gis) + UAV barriers between
+# write-only storage-texture writes on DX12; drop once upstream has both.
+[patch.crates-io]
+wgpu-hal = { path = "third_party/wgpu-hal" }
