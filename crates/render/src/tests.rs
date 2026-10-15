@@ -953,3 +953,21 @@ fn shape_content_bounds_are_the_visual_edges() {
         assert!(b.iter().zip([-half, -half, half, half]).all(|(a, e)| (a - e).abs() < 1e-6), "{stroke:?}: {b:?}");
     }
 }
+
+/// Solo is not time-dependent (as in After Effects): while any layer is soloed, the others stay
+/// excluded even when the playhead is outside the soloed layer's in-out range.
+#[test]
+fn solo_excludes_other_layers_outside_the_soloed_layers_range() {
+    let (mut p, cid, comp) = setup();
+    let a = solid(&mut p, &comp, [1.0, 0.0, 0.0], 200, 100);
+    let mut b = solid(&mut p, &comp, [0.0, 0.0, 1.0], 200, 100);
+    b.in_point = Tick::from_seconds_f64(1.0);
+    b.switches.solo = true;
+    let c = p.comp_mut(cid).unwrap();
+    c.layers.push(b);
+    c.layers.push(a);
+    let first = render_frame(&p, cid, Tick::from_seconds_f64(0.5), 1.0);
+    assert_eq!(first.get(100, 50), [0.0, 0.0, 0.0, 0.0], "neither A nor B before B's in point");
+    let second = render_frame(&p, cid, Tick::from_seconds_f64(1.5), 1.0);
+    assert_eq!(second.get(100, 50), [0.0, 0.0, 1.0, 1.0], "only B inside its range");
+}
