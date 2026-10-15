@@ -380,11 +380,14 @@ fn native_file(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsV
         }
         let s = &a.session;
         match op.as_str() {
-            "access" => Ok(json!(check_access(s, &path, false)?.exists())),
+            // Through the session's services, like the reads: hosts without a file system (the
+            // browser's file table) answer for their own files.
+            "access" => Ok(json!(s.services.exists(&check_access(s, &path, false)?.to_string_lossy()))),
             "exists" | "isDir" => {
                 // Unreadable locations report "missing" instead of failing.
                 let Ok(p) = check_access(s, &path, false) else { return Ok(json!(false)) };
-                Ok(json!(if op == "exists" { p.exists() } else { p.is_dir() }))
+                let p = p.to_string_lossy();
+                Ok(json!(if op == "exists" { s.services.exists(&p) } else { s.services.is_dir(&p) }))
             }
             "read" | "readBinary" => {
                 let p = check_access(s, &path, false)?;

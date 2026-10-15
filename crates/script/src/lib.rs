@@ -107,4 +107,6 @@ mod tests_ui_more;
 #[cfg(test)]
 mod tests_evalfile;
 #[cfg(test)]
+mod tests_services;
+#[cfg(test)]
 mod tests_ui_mouse;
