@@ -3320,7 +3320,8 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
     }
 
-    // Drop targets: effects from Effects & Presets go on the layer under the pointer. Footage and
+    // Drop targets: effects and animation presets from Effects & Presets go on the layer under the
+    // pointer. Footage and
     // comps from the Project panel and files from the Media Browser go where they are dropped: a
     // line shows the place in the stack, and over the time graph a marker shows the In point too
     // (Shift: at the current time).
@@ -3329,11 +3330,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         && let Some(ptr) = ctx.input(|i| i.pointer.hover_pos()).filter(|_| ui.rect_contains_pointer(rows_rect))
     {
         let released = ctx.input(|i| i.pointer.any_released());
-        if let crate::panels::DragPayload::Effect(e) = payload.as_ref() {
+        if matches!(payload.as_ref(), crate::panels::DragPayload::Effect(_) | crate::panels::DragPayload::Preset { .. }) {
             p.rect_stroke(rows_rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
             let target = hit_rows.iter().find(|(r, _)| ptr.y >= r.min.y && ptr.y < r.max.y).map(|(_, row)| row.layer);
             if released && let Some(l) = target {
-                actions.push(("effect.apply".into(), json!({"effect": e, "layers": [l.0]})));
+                match payload.as_ref() {
+                    crate::panels::DragPayload::Effect(e) => actions.push(("effect.apply".into(), json!({"effect": e, "layers": [l.0]}))),
+                    crate::panels::DragPayload::Preset { preset, .. } => {
+                        let (id, params) = preset.apply_to(l.0);
+                        actions.push((id.into(), params));
+                    }
+                    _ => {}
+                }
             }
         } else {
             let layer_rows: Vec<(Rect, LayerId)> = hit_rows.iter().filter(|(_, r)| matches!(r.kind, RowKind::Layer)).map(|(rr, r)| (*rr, r.layer)).collect();
@@ -3369,7 +3377,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     crate::panels::DragPayload::Files(paths) => {
                         actions.push(("mediaBrowser.import".into(), json!({"paths": paths, "addToComp": true, "index": index, "time": time})))
                     }
-                    crate::panels::DragPayload::Effect(_) | crate::panels::DragPayload::Property { .. } => {}
+                    crate::panels::DragPayload::Effect(_) | crate::panels::DragPayload::Preset { .. } | crate::panels::DragPayload::Property { .. } => {}
                 }
             }
         }

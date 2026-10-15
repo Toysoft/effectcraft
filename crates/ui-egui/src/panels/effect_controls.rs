@@ -1394,14 +1394,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     ui.set_clip_rect(panel_clip);
     let content_h = y + scroll.offset - body.min.y;
     scroll.end(ui, &mut app.auto, "effectControls.scroll", content_h, &t);
-    // Drop effects here.
+    // Drop effects and animation presets here.
     if let Some(payload) = egui::DragAndDrop::payload::<crate::panels::DragPayload>(&ctx)
         && ui.rect_contains_pointer(rect)
-        && let crate::panels::DragPayload::Effect(e) = payload.as_ref()
+        && let Some((id, params)) = match payload.as_ref() {
+            crate::panels::DragPayload::Effect(e) => Some(("effect.apply", json!({"effect": e, "layers": [layer.id.0]}))),
+            crate::panels::DragPayload::Preset { preset, .. } => Some(preset.apply_to(layer.id.0)),
+            _ => None,
+        }
     {
         p.rect_stroke(rect, 0.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
         if ctx.input(|i| i.pointer.any_released()) {
-            actions.push(("effect.apply".into(), json!({"effect": e, "layers": [layer.id.0]})));
+            actions.push((id.into(), params));
             egui::DragAndDrop::clear_payload(&ctx);
         }
     }

@@ -2,15 +2,15 @@
 //! filters, animation presets on/off, categories or alphabetical, refresh), Favorites (star an
 //! effect), Recently Used, "* Animation Presets" (EffectCraft's own text animation and transition
 //! presets and the user's `.ecpreset` files) and the effect categories. Double-click applies to the
-//! selected layers; dragging an effect onto a layer (timeline, viewer, Effect Controls) applies
-//! it there.
+//! selected layers; dragging an effect or an animation preset onto a layer (timeline, viewer,
+//! Effect Controls) applies it there.
 
 use crate::i18n::tr;
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
 use crate::icons::{self, Icon};
-use crate::panels::DragPayload;
+use crate::panels::{DragPayload, PresetRef};
 use crate::theme::Tokens;
 use crate::{EffectcraftApp, widgets};
 
@@ -107,10 +107,8 @@ fn highlighted(p: &egui::Painter, pos: egui::Pos2, name: &str, query: &str, t: &
 
 enum Apply {
     Effect(String),
-    TextPreset(String),
-    /// A built-in animation preset (Transitions…) by id.
-    Builtin(String),
-    PresetFile(String),
+    /// A text, built-in (Transitions…) or user file animation preset.
+    Preset(PresetRef),
 }
 
 /// A folder row; returns whether it is open.
@@ -217,7 +215,7 @@ fn effect_row(
     }
 }
 
-/// A preset row (no drag; double-click applies).
+/// A preset row: double-click applies to the selected layers; drag it onto a layer to apply it there.
 #[allow(clippy::too_many_arguments)]
 fn preset_row(
     app: &mut EffectcraftApp,
@@ -228,7 +226,7 @@ fn preset_row(
     name: &str,
     auto_id: &str,
     query: &str,
-    on_apply: Apply,
+    preset: PresetRef,
     apply: &mut Option<Apply>,
 ) {
     let t = app.tokens;
@@ -237,15 +235,18 @@ fn preset_row(
     if r.max.y < list.min.y || r.min.y > list.max.y {
         return;
     }
-    let resp = ui.interact(r.intersect(list), egui::Id::new(("fxpreset", auto_id)), Sense::click());
+    let resp = ui.interact(r.intersect(list), egui::Id::new(("fxpreset", auto_id)), Sense::click_and_drag());
     if resp.hovered() {
         lp.rect_filled(r, 0.0, t.hover);
     }
     icons::paint(lp, Rect::from_center_size(pos2(r.min.x + 58.0, r.center().y), vec2(12.0, 12.0)), Icon::Keyframe, t.text_dim);
     highlighted(lp, pos2(r.min.x + 70.0, r.center().y), name, query, &t);
     app.auto.add(auto_id, r, name);
+    if resp.drag_started() {
+        egui::DragAndDrop::set_payload(ui.ctx(), DragPayload::Preset { preset: preset.clone(), name: name.to_string() });
+    }
     if resp.double_clicked() {
-        *apply = Some(on_apply);
+        *apply = Some(Apply::Preset(preset));
     }
 }
 
@@ -395,7 +396,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if any && folder_row(app, ui, &lp, list, &mut y, "presets", "* Animation Presets", 0.0, searching, None) {
             if !text.is_empty() && folder_row(app, ui, &lp, list, &mut y, "presets/Text", "Text", 14.0, searching, None) {
                 for (id, name) in text {
-                    preset_row(app, ui, &lp, list, &mut y, &name, &format!("effects.preset.text.{id}"), &query, Apply::TextPreset(id.clone()), &mut apply);
+                    preset_row(app, ui, &lp, list, &mut y, &name, &format!("effects.preset.text.{id}"), &query, PresetRef::Text(id.clone()), &mut apply);
                 }
             }
             for cat in &categories {
@@ -403,7 +404,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     continue;
                 }
                 for (id, name, _) in builtin.iter().filter(|(_, _, c)| c == cat) {
-                    preset_row(app, ui, &lp, list, &mut y, name, &format!("effects.preset.builtin.{id}"), &query, Apply::Builtin(id.clone()), &mut apply);
+                    preset_row(app, ui, &lp, list, &mut y, name, &format!("effects.preset.builtin.{id}"), &query, PresetRef::Builtin(id.clone()), &mut apply);
                 }
             }
             if !files.is_empty() && folder_row(app, ui, &lp, list, &mut y, "presets/User", "User Presets", 14.0, searching, None) {
@@ -417,7 +418,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         &f.name,
                         &format!("effects.preset.file.{}", f.name),
                         &query,
-                        Apply::PresetFile(f.path.clone()),
+                        PresetRef::File(f.path.clone()),
                         &mut apply,
                     );
                 }
@@ -455,10 +456,12 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     let content = y + scroll.offset - list.min.y;
     scroll.end(ui, &mut app.auto, "effects.scroll", content, &t);
-    if let Some(DragPayload::Effect(id)) = egui::DragAndDrop::payload::<DragPayload>(&ctx).as_deref()
-        && let Some(pos) = ctx.pointer_hover_pos()
+    if let Some(name) = egui::DragAndDrop::payload::<DragPayload>(&ctx).and_then(|p| match p.as_ref() {
+        DragPayload::Effect(id) => Some(effectcraft_engine::effects::find(id).map(|e| crate::i18n::effects::name(e.id, e.name)).unwrap_or_default()),
+        DragPayload::Preset { name, .. } => Some(name.clone()),
+        _ => None,
+    }) && let Some(pos) = ctx.pointer_hover_pos()
     {
-        let name = effectcraft_engine::effects::find(id).map(|e| crate::i18n::effects::name(e.id, e.name)).unwrap_or_default();
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("dnd-fx")));
         let g = painter.layout_no_wrap(name, Tokens::ui(12.0), t.text);
         let r = Rect::from_min_size(pos + vec2(12.0, 8.0), g.size() + vec2(16.0, 8.0));
@@ -473,9 +476,7 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     let (cmd, params) = match &apply {
         Apply::Effect(id) => ("effect.apply", json!({"effect": id})),
-        Apply::TextPreset(id) => ("layer.applyTextPreset", json!({"preset": id})),
-        Apply::Builtin(id) => ("anim.applyBuiltinPreset", json!({"preset": id})),
-        Apply::PresetFile(path) => ("anim.applyPreset", json!({"path": path})),
+        Apply::Preset(preset) => preset.command(),
     };
     match app.session.execute(cmd, params) {
         Err(e) => app.ui.status = e.to_string(),
