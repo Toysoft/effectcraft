@@ -3330,8 +3330,18 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
     {
         let released = ctx.input(|i| i.pointer.any_released());
         if let crate::panels::DragPayload::Effect(e) = payload.as_ref() {
-            p.rect_stroke(rows_rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
             let target = hit_rows.iter().find(|(r, _)| ptr.y >= r.min.y && ptr.y < r.max.y).map(|(_, row)| row.layer);
+            // The layer the effect would land on (its row and its open properties) is the one
+            // that lights up, not the whole timeline.
+            if let Some(l) = target
+                && let Some(span) = hit_rows.iter().filter(|(_, row)| row.layer == l).map(|(r, _)| *r).reduce(|a, b| a.union(b))
+            {
+                let lit = span.intersect(rows_rect);
+                let rp = p.with_clip_rect(rows_rect);
+                rp.rect_filled(lit, 0.0, t.accent.gamma_multiply(0.18));
+                rp.rect_stroke(lit, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
+                app.auto.add("timeline.dropTarget", lit, "Drop target layer");
+            }
             if released && let Some(l) = target {
                 actions.push(("effect.apply".into(), json!({"effect": e, "layers": [l.0]})));
             }
