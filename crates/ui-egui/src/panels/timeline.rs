@@ -1992,8 +1992,11 @@ pub fn show(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 gp.line_segment([pos2(graph_x0, r.max.y - 0.5), pos2(r.max.x, r.max.y - 0.5)], Stroke::new(1.0, t.app_bg));
                 // A/V features.
                 let sw = &layer.switches;
+                // Every layer has the Video switch (the eye), nulls, cameras and lights included,
+                // as in After Effects: it hides a null's outline in the viewer and turns a camera or
+                // light off.
                 let av_items: [(Icon, bool, &str, bool); 4] = [
-                    (Icon::Eye, sw.video, "video", layer.source.is_av()),
+                    (Icon::Eye, sw.video, "video", true),
                     (Icon::Speaker, sw.audio, "audio", layer.props.sub("audio").is_some()),
                     (Icon::Solo, sw.solo, "solo", layer.source.is_av()),
                     (Icon::Lock, sw.locked, "lock", true),

@@ -2270,3 +2270,41 @@ fn mask_marquee_selects_vertices() {
     let sel = &h.state().session.state.selected_vertices;
     assert_eq!(sel.len(), 2, "shift-marquee adds: {sel:?}");
 }
+
+/// A null's eye in the Timeline hides it in the Composition viewer, as in After Effects: its box
+/// and handles go even while it is selected and a click on its box doesn't pick it; the eye back
+/// on brings them back.
+#[test]
+fn null_eye_hides_it_in_the_viewer() {
+    let mut s = Session::default();
+    s.execute("comp.new", json!({"name": "Nulls", "width": 640, "height": 360, "duration": 4})).unwrap();
+    let n = s.execute("layer.newNull", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layers": [n]})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_eframe(move |_| EffectcraftApp::new(s));
+    h.run_steps(3);
+    let handle = format!("viewer.handle.{n}.0");
+    let eye = format!("timeline.layer.{n}.video");
+    assert!(h.state().auto.find(&handle).is_some(), "a shown null has handles");
+    // The eye is there for a null and turns its video off.
+    let at = rect(&h, &eye).center();
+    click(&mut h, at);
+    assert!(!h.state().session.active_comp().unwrap().layer(LayerId(n)).unwrap().switches.video);
+    h.run_steps(2);
+    assert!(h.state().auto.find(&handle).is_none(), "a hidden null has no handles");
+    // A click on its box doesn't pick it.
+    h.state_mut().session.execute("edit.deselectAll", json!({})).unwrap();
+    h.run_steps(40); // A new click, not a double-click.
+    let centre = screen(&h, [320.0, 180.0]);
+    click(&mut h, centre);
+    assert!(h.state().session.state.selected_layers.is_empty());
+    // The eye back on: selectable again, with its handles.
+    h.run_steps(40);
+    let at = rect(&h, &eye).center();
+    click(&mut h, at);
+    assert!(h.state().session.active_comp().unwrap().layer(LayerId(n)).unwrap().switches.video);
+    h.run_steps(40);
+    click(&mut h, centre);
+    assert_eq!(h.state().session.state.selected_layers, vec![LayerId(n)]);
+    h.run_steps(2);
+    assert!(h.state().auto.find(&handle).is_some(), "handles back with the eye on");
+}
