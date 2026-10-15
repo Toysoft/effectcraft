@@ -209,6 +209,14 @@ pub fn media_browser(app: &mut EffectcraftApp, ui: &mut egui::Ui, rect: Rect) {
             egui::DragAndDrop::set_payload(&ctx, DragPayload::Files(vec![e.path.clone()]));
         }
         crate::widgets::context_menu(&resp, |ui| {
+            let copy = ui.button(tr("Copy Source Path"));
+            app.auto.add(&format!("mediaBrowser.entry.{}.copySourcePath", e.name), copy.rect, "Copy Source Path");
+            if copy.clicked() {
+                if let Err(e) = crate::menus::invoke(app, &ctx, "mediaBrowser.copySourcePath", json!({"path": e.path})) {
+                    app.ui.status = e;
+                }
+                ui.close();
+            }
             if !e.is_dir && ui.button(tr("Import")).clicked() {
                 actions.push(("mediaBrowser.import", json!({"paths": [e.path]})));
                 ui.close();
