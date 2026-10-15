@@ -31,6 +31,7 @@
 //! deterministic function of its *chain*: the base frame's strokes, then every frame's strokes
 //! on the way out to it ([`RotoData::chain_keys`]).
 
+pub mod bench;
 pub mod gmm;
 pub mod matting;
 pub mod maxflow;
@@ -831,6 +832,70 @@ fn points_along(s: &Stroke, scale: f64, max: usize) -> Vec<[f32; 2]> {
         carry = (carry + d) % step;
     }
     out
+}
+
+/// A tracker's prompt from a frame's strokes (points along the foreground and background strokes,
+/// in frame pixels at `scale`).
+///
+/// SAM 2 was trained on a handful of clicks: with sixteen or more points it doubts its own mask
+/// (measured: confidence 0.25 with 16 points, 0.00 with 32, 0.99 with 1 to 7), so this picks at
+/// most [`TRACKER_FG_POINTS`] foreground and [`TRACKER_BG_POINTS`] background points, spread
+/// along the strokes.
+pub fn tracker_prompt(strokes: &[&Stroke], scale: f64) -> Prompt {
+    let mut points = vec![];
+    for (kind, fg, max) in [(StrokeKind::Fg, true, TRACKER_FG_POINTS), (StrokeKind::Bg, false, TRACKER_BG_POINTS)] {
+        let all: Vec<[f32; 2]> = strokes.iter().filter(|s| s.kind == kind).flat_map(|s| points_along(s, scale, 3)).collect();
+        let n = all.len().min(max);
+        // evenly spaced picks, keeping the first and the last
+        points.extend((0..n).filter_map(|i| all.get(if n > 1 { i * (all.len() - 1) / (n - 1) } else { all.len() / 2 }).map(|p| (*p, fg))));
+    }
+    // a box the user drew on the frame prompts the tracker too
+    let bbox = strokes.iter().filter(|s| s.kind == StrokeKind::Box).find_map(|s| box_of(s, scale));
+    Prompt { points, bbox, ..Default::default() }
+}
+
+/// [`tracker_prompt`] plus a box around the classic engine's matte of the same strokes. Clicks alone
+/// make SAM 2 pick the part they land on (a torso, not the legs and shoes: measured IoU 0.41 on a
+/// multi-part figure, against 1.00 with the box); the box says how far the object reaches. A box
+/// stroke the user drew wins over the matte's.
+pub fn tracker_prompt_boxed(strokes: &[&Stroke], scale: f64, classic: &FrameSeg) -> Prompt {
+    let mut p = tracker_prompt(strokes, scale);
+    if p.bbox.is_none() {
+        let (w, h) = (classic.w, classic.h);
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for (i, v) in classic.matte.iter().enumerate() {
+            if *v != 0 && w > 0 {
+                let (x, y) = (i % w, i / w);
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            }
+        }
+        if x0 <= x1 {
+            let (mx, my) = (((x1 - x0) as f32 * 0.05).max(4.0), ((y1 - y0) as f32 * 0.05).max(4.0));
+            p.bbox = Some([(x0 as f32 - mx).max(0.0), (y0 as f32 - my).max(0.0), (x1 as f32 + 1.0 + mx).min(w as f32), (y1 as f32 + 1.0 + my).min(h as f32)]);
+        }
+    }
+    p
+}
+
+/// Most foreground / background points a tracker prompt carries.
+pub const TRACKER_FG_POINTS: usize = 3;
+pub const TRACKER_BG_POINTS: usize = 3;
+
+/// A frame's segmentation from a tracker's probability map: the map is the shape prior of the
+/// same graph cut as everywhere else, so the strokes stay hard constraints and the edges snap
+/// to colour. An absent object gives an empty matte (strokes on the frame still win); a map of
+/// the wrong size is ignored.
+pub fn segment_tracked(img: &Image, strokes: &[&Stroke], prob: Vec<f32>, occluded: bool, opts: &SegOpts, refine_radius: f64) -> FrameSeg {
+    let (w, h) = (img.width as usize, img.height as usize);
+    if prob.len() != w * h || w == 0 || h == 0 {
+        return segment(img, strokes, None, opts, refine_radius);
+    }
+    let has_fg = strokes.iter().any(|s| s.kind == StrokeKind::Fg);
+    if (occluded || !prob.iter().any(|p| *p >= 0.5)) && !has_fg {
+        return FrameSeg::empty(w, h);
+    }
+    let prior = Prior { soft: prob, fg: Gmm::default(), bg: Gmm::default(), refine: vec![0; w * h], weight: MODEL_PRIOR };
+    segment(img, strokes, Some(&prior), opts, refine_radius)
 }
 
 /// A model's prompt from the strokes: points along the foreground and background strokes, and

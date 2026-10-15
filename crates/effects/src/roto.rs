@@ -29,9 +29,9 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use effectcraft_keyframe::Value;
 use effectcraft_project::ParamUi;
 use effectcraft_raster::Image;
-use effectcraft_segment::MaskModel;
+use effectcraft_segment::{ClipFrame, MaskModel, TrackRequest};
 use effectcraft_track::roto::refine::{self, MatteParams};
-use effectcraft_track::roto::{self as rb, RotoData, SegOpts, rle};
+use effectcraft_track::roto::{self as rb, Gmm, RotoData, SegOpts, rle};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,8 @@ pub const ID: &str = "ec.matte.rotobrush";
 pub const STROKES: &str = "strokes";
 pub const INPUT_KEY: &str = "inputKey";
 pub const FROZEN: &str = "frozen";
+/// The saved tracking (see [`TrackCache`]).
+pub const TRACKED: &str = "tracked";
 
 /// Default segmentation span each side of the base frame (frames).
 pub const DEFAULT_SPAN: i64 = 20;
@@ -95,6 +97,7 @@ pub fn specs() -> Vec<EffectSpec> {
             p(STROKES, "Strokes", Value::Str(String::new()), ParamUi::Hidden),
             p(INPUT_KEY, "Input Key", Value::Str(String::new()), ParamUi::Hidden),
             p(FROZEN, "Frozen", Value::Str(String::new()), ParamUi::Hidden),
+            p(TRACKED, "Tracked", Value::Str(String::new()), ParamUi::Hidden),
         ],
         render,
         gpu: false,
@@ -191,9 +194,15 @@ pub fn set_model(m: Option<Arc<dyn MaskModel>>) {
     }
 }
 
+/// Whether an instance with `params` segments with the model Settings chose: Roto Brush 2.0 and
+/// 3.0 do, 1.0 is the classic engine.
+pub fn uses_model(params: &Params) -> bool {
+    e(params, "version") != 0
+}
+
 /// The model an instance segments with: its version's choice of the installed one.
 pub fn model_for(params: &Params) -> Option<Arc<dyn MaskModel>> {
-    if e(params, "version") == 0 {
+    if !uses_model(params) {
         return None;
     }
     installed_model()
@@ -208,6 +217,11 @@ pub fn installed_model() -> Option<Arc<dyn MaskModel>> {
 /// Seed of the chain keys: what the frames are (the engine-maintained Input Key), the layer
 /// size, the frame rate, the segmentation settings and the model.
 pub fn seed(params: &Params, layer_size: [f64; 2], fps: f64) -> u64 {
+    seed_with(params, layer_size, fps, model_for(params).map_or(effectcraft_segment::CLASSICAL, |m| m.info().id))
+}
+
+/// [`seed`] with the segmenting model named by its id (saved tracking names the one that made it).
+fn seed_with(params: &Params, layer_size: [f64; 2], fps: f64, model: &str) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325;
     fnv(&mut h, s(params, INPUT_KEY).as_bytes());
     for v in [
@@ -221,7 +235,7 @@ pub fn seed(params: &Params, layer_size: [f64; 2], fps: f64) -> u64 {
         fnv(&mut h, &v.to_bits().to_le_bytes());
     }
     fnv(&mut h, &[e(params, "quality") as u8, e(params, "version") as u8]);
-    fnv(&mut h, model_for(params).map_or(effectcraft_segment::CLASSICAL, |m| m.info().id).as_bytes());
+    fnv(&mut h, model.as_bytes());
     h
 }
 
@@ -298,9 +312,39 @@ fn from_store(key: u64, scale: f64) -> Option<Arc<FrameSeg>> {
     Some(seg)
 }
 
+/// Tracker results live under the chain key mixed with this, so a frame the tracker followed and
+/// one the classic engine computed never share a cache slot.
+const TRACK_SALT: u64 = 0x7472_6163_6b65_7231;
+
+fn tracked_key(key: u64) -> u64 {
+    key.rotate_left(17) ^ TRACK_SALT
+}
+
+/// How far to trust a frame the tracker followed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameTrust {
+    /// 0–1, from the tracker's own object score and mask quality.
+    pub confidence: f32,
+    /// The object is not in this frame (an empty matte).
+    pub occluded: bool,
+}
+
+fn trust_cache() -> &'static Mutex<HashMap<u64, FrameTrust>> {
+    static T: OnceLock<Mutex<HashMap<u64, FrameTrust>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The tracker's confidence in the frame with chain key `key`, if the tracker followed it.
+pub fn trust(key: u64) -> Option<FrameTrust> {
+    trust_cache().lock().unwrap_or_else(|e| e.into_inner()).get(&tracked_key(key)).copied()
+}
+
 /// Drop the cached segmentations of these chain keys (every scale).
 pub fn forget(keys: impl IntoIterator<Item = u64>) {
-    let keys: std::collections::HashSet<u64> = keys.into_iter().collect();
+    let mut trusts = trust_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let keys: std::collections::HashSet<u64> = keys.into_iter().flat_map(|k| [k, tracked_key(k)]).collect();
+    trusts.retain(|k, _| !keys.contains(k));
+    drop(trusts);
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     let gone: Vec<(u64, u64)> = c.map.keys().filter(|k| keys.contains(&k.0)).copied().collect();
     for k in gone {
@@ -313,6 +357,7 @@ pub fn forget(keys: impl IntoIterator<Item = u64>) {
 
 /// Drop every cached segmentation (Edit ▸ Purge).
 pub fn purge() {
+    trust_cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     c.map.clear();
     c.order.clear();
@@ -333,6 +378,16 @@ pub fn layer_grid(buf: &Buf, layer_size: [f64; 2]) -> Image {
     img
 }
 
+/// What a tracking pass found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackSummary {
+    pub frames: usize,
+    /// Frames where the object was absent.
+    pub occluded: usize,
+    pub min_confidence: f32,
+}
+
 /// Everything needed to compute an instance's segmentations.
 pub struct Chain {
     pub data: Arc<RotoData>,
@@ -341,13 +396,57 @@ pub struct Chain {
     pub refine_radius: f64,
     /// The trained model (Version 2.0 / 3.0 with one installed).
     pub model: Option<Arc<dyn MaskModel>>,
+    /// The saved tracking, while it applies (see [`TrackCache`]).
+    pub(crate) saved: Option<SavedTracking>,
 }
 
 impl Chain {
     pub fn new(params: &Params, layer_size: [f64; 2], fps: f64, scale: f64) -> Chain {
         let data = data(params);
         let keys = data.chain_keys(seed(params, layer_size, fps));
-        Chain { refine_radius: data.refine_radius(), data, keys, opts: seg_opts(params, scale), model: model_for(params) }
+        let saved = saved_for(params, &data, layer_size, fps);
+        Chain { refine_radius: data.refine_radius(), data, keys, opts: seg_opts(params, scale), model: model_for(params), saved }
+    }
+
+    /// Frame `f`'s segmentation at `scale` from the saved tracking or the caches; computes nothing.
+    pub fn cached_seg(&self, f: i64, scale: f64) -> Option<Arc<FrameSeg>> {
+        self.saved_seg(f, scale).or_else(|| self.keys.get(&f).and_then(|k| cached(*k, scale)))
+    }
+
+    /// The tracker's trust in frame `f`: from the saved tracking, else from this session's tracking.
+    pub fn trust_at(&self, f: i64) -> Option<FrameTrust> {
+        if let Some(fr) = self.saved.as_ref().and_then(|t| t.cache.frames.get(&f)) {
+            return Some(FrameTrust { confidence: fr.c, occluded: fr.o });
+        }
+        trust(*self.keys.get(&f)?)
+    }
+
+    /// The model the saved tracking was made with, while it applies.
+    pub fn saved_model(&self) -> Option<&str> {
+        self.saved.as_ref().map(|t| t.cache.model.as_str())
+    }
+
+    /// Frame `f` of the saved tracking at `scale` (decoded once, then cached).
+    fn saved_seg(&self, f: i64, scale: f64) -> Option<Arc<FrameSeg>> {
+        let t = self.saved.as_ref()?;
+        let k = tracked_key(*t.keys.get(&f)?);
+        if let Some(s) = cached(k, scale) {
+            return Some(s);
+        }
+        let full = match cached(k, 1.0) {
+            Some(s) => s,
+            None => {
+                let s = Arc::new(decode_tracked(&t.cache, f)?);
+                store(k, 1.0, s.clone());
+                s
+            }
+        };
+        if scale == 1.0 {
+            return Some(full);
+        }
+        let s = Arc::new(downscale(&full, scale));
+        store(k, scale, s.clone());
+        Some(s)
     }
 
     /// Frame `f`'s segmentation at this chain's scale: cached, or computed from the nearest
@@ -356,12 +455,20 @@ impl Chain {
     pub fn ensure(&self, f: i64, frame: &mut dyn FnMut(i64) -> Option<Arc<Image>>, cancel: &dyn Fn() -> bool) -> Option<Arc<FrameSeg>> {
         let sc = self.opts.scale;
         let lookup = |g: i64| -> Option<Arc<FrameSeg>> {
+            // A frame the tracker followed wins over the classic engine's: the saved tracking, else
+            // this session's.
+            if let Some(s) = self.saved_seg(g, sc) {
+                return Some(s);
+            }
             let k = *self.keys.get(&g)?;
+            if let Some(s) = cached(tracked_key(k), sc) {
+                return Some(s);
+            }
             if let Some(s) = cached(k, sc).or_else(|| from_store(k, sc)) {
                 return Some(s);
             }
             if sc != 1.0 {
-                let full = cached(k, 1.0).or_else(|| from_store(k, 1.0))?;
+                let full = cached(tracked_key(k), 1.0).or_else(|| cached(k, 1.0)).or_else(|| from_store(k, 1.0))?;
                 let s = Arc::new(downscale(&full, sc));
                 store(k, sc, s.clone());
                 return Some(s);
@@ -407,7 +514,8 @@ impl Chain {
                     if pimg.width != img.width || pimg.height != img.height {
                         return None;
                     }
-                    rb::propagate_with(&pimg, p, &img, &strokes, &self.opts, self.refine_radius, self.model.as_deref())
+                    // A tracker is too slow to prompt on every frame (its pass is `track`); the classic flow carries the rest.
+                    rb::propagate_with(&pimg, p, &img, &strokes, &self.opts, self.refine_radius, if self.has_tracker() { None } else { self.model.as_deref() })
                 }
             };
             let seg = Arc::new(seg);
@@ -424,7 +532,84 @@ impl Chain {
 
     /// Whether frame `f` is computed (at full resolution or at `scale`).
     pub fn is_cached(&self, f: i64, scale: f64) -> bool {
-        self.keys.get(&f).is_some_and(|k| cached(*k, 1.0).is_some() || cached(*k, scale).is_some())
+        self.keys.get(&f).is_some_and(|k| [*k, tracked_key(*k)].iter().any(|k| cached(*k, 1.0).is_some() || cached(*k, scale).is_some()))
+    }
+
+    /// Whether the chosen model can follow an object through a clip (SAM 2).
+    pub fn has_tracker(&self) -> bool {
+        self.model.as_ref().is_some_and(|m| m.tracker().is_some())
+    }
+
+    /// Follow the object through the span with the model's tracker, from the strokes on their
+    /// frames (only the frames without a tracked result yet: after a correction stroke, the frames it
+    /// changes, tracked on from the nearest prompted frame), and cache every frame's segmentation (under the tracker's keys, with its
+    /// confidence). The strokes stay hard constraints and the edges are refined at full
+    /// resolution; frames the tracker can't give are left to [`Chain::ensure`]'s classic engine.
+    /// `progress` gets the number of frames finished. `Ok(None)`: no tracker, nothing done.
+    pub fn track(
+        &self,
+        frame: &mut dyn FnMut(i64) -> Option<Arc<Image>>,
+        cancel: &dyn Fn() -> bool,
+        progress: &mut dyn FnMut(usize),
+    ) -> Result<Option<TrackSummary>, String> {
+        let Some(tracker) = self.model.as_ref().and_then(|m| m.tracker()) else { return Ok(None) };
+        let (Some(_), true) = (self.data.base, self.data.span[1] >= self.data.span[0]) else { return Err("no base frame".into()) };
+        // Frames of the span that already have a tracked result (this session's, or the saved
+        // tracking) are kept: only the rest is tracked. A correction stroke changes the keys of the
+        // frames from it on (both directions), so only those come back here.
+        let (lo_span, hi_span) = (self.data.span[0], self.data.span[1]);
+        let needed: Vec<i64> = (lo_span..=hi_span)
+            .filter(|f| self.keys.get(f).is_some_and(|k| self.saved_seg(*f, self.opts.scale).is_none() && cached(tracked_key(*k), self.opts.scale).is_none()))
+            .collect();
+        let (Some(&need_lo), Some(&need_hi)) = (needed.first(), needed.last()) else {
+            return Ok(Some(TrackSummary::default()));
+        };
+        // A prompt is a few clicks from the strokes and a box around what the classic engine makes of
+        // them on that frame (clicks alone pick a part of the object, not all of it).
+        let mut all_prompts: Vec<(i64, effectcraft_segment::Prompt)> = vec![];
+        for f in self.data.stroke_frames().into_iter().filter(|f| self.data.in_span(*f)) {
+            let strokes = self.data.strokes_at(f);
+            let p = match frame(f) {
+                Some(img) => rb::tracker_prompt_boxed(&strokes, self.opts.scale, &rb::segment(&img, &strokes, None, &self.opts, self.refine_radius)),
+                None => rb::tracker_prompt(&strokes, self.opts.scale),
+            };
+            if p.points.iter().any(|(_, fg)| *fg) {
+                all_prompts.push((f, p));
+            }
+        }
+        if all_prompts.is_empty() {
+            return Err("no foreground strokes to follow".into());
+        }
+        // The window to track: from the nearest prompted frame at or before the first frame needed
+        // (a correction restarts the object there) to the last frame needed, reaching the first
+        // prompted frame when everything needed lies before it.
+        let first_prompt = all_prompts.first().map_or(need_lo, |p| p.0);
+        let lo = all_prompts.iter().map(|p| p.0).filter(|f| *f <= need_lo).max().unwrap_or(need_lo);
+        let hi = if need_hi < first_prompt { first_prompt } else { need_hi };
+        let prompts: Vec<(i64, effectcraft_segment::Prompt)> = all_prompts.into_iter().filter(|p| p.0 >= lo && p.0 <= hi).collect();
+        let req = TrackRequest::single(lo, (hi - lo + 1) as usize, prompts);
+        let frame = std::cell::RefCell::new(frame);
+        let mut summary = TrackSummary::default();
+        tracker.track(
+            &req,
+            &mut |g| {
+                let img = (frame.borrow_mut())(g)?;
+                Some(Arc::new(ClipFrame { rgb: rb::rgb_of(&img), w: img.width as usize, h: img.height as usize }))
+            },
+            cancel,
+            &mut |_, g, t| {
+                let (Some(key), Some(img)) = (self.keys.get(&g).copied(), (frame.borrow_mut())(g)) else { return };
+                let strokes = self.data.strokes_at(g);
+                let seg = rb::segment_tracked(&img, &strokes, t.prob, t.occluded, &self.opts, self.refine_radius);
+                store(tracked_key(key), self.opts.scale, Arc::new(seg));
+                trust_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(tracked_key(key), FrameTrust { confidence: t.confidence, occluded: t.occluded });
+                summary.frames += 1;
+                summary.occluded += usize::from(t.occluded);
+                summary.min_confidence = if summary.frames == 1 { t.confidence } else { summary.min_confidence.min(t.confidence) };
+                progress(summary.frames);
+            },
+        )?;
+        Ok(Some(summary))
     }
 }
 
@@ -542,6 +727,128 @@ fn frozen(params: &Params) -> Option<Arc<FrozenCache>> {
     }
     m.insert(h, d.clone());
     Some(d)
+}
+
+// ------------------------------------------------------------------ saved tracking
+
+/// The tracker's frames of an instance, saved with the project (the hidden [`TRACKED`] parameter,
+/// as [`FrozenCache`] is). They apply while `key` matches the instance's inputs ([`tracks_key`]),
+/// whichever model Settings choose: a stroke or span change makes them stale, and the next Propagate
+/// replaces them (with the classic engine, that leaves none).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TrackCache {
+    /// What the frames were tracked from ([`tracks_key`]).
+    pub key: String,
+    /// The tracker's model id.
+    pub model: String,
+    /// The mattes' width and height (the layer's size).
+    pub size: [usize; 2],
+    pub frames: BTreeMap<i64, TrackFrame>,
+}
+
+/// One tracked frame: its matte and Refine Edge band (RLE, base64), its colour models and the
+/// tracker's trust in it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackFrame {
+    /// Matte (RLE, base64).
+    pub m: String,
+    /// Refine Edge band (RLE, base64).
+    pub r: String,
+    pub fg: Gmm,
+    pub bg: Gmm,
+    /// 0–1: the tracker's confidence.
+    pub c: f32,
+    /// The object is not in the frame.
+    pub o: bool,
+}
+
+impl TrackCache {
+    pub fn from_json(s: &str) -> Option<TrackCache> {
+        if s.trim().is_empty() {
+            return None;
+        }
+        serde_json::from_str(s).ok()
+    }
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+/// What saved tracking depends on: the chain keys of its frames (the inputs and the model).
+pub fn tracks_key(keys: &BTreeMap<i64, u64>) -> String {
+    let mut h = 0xcbf2_9ce4_8422_2325;
+    for (f, k) in keys {
+        fnv(&mut h, &f.to_le_bytes());
+        fnv(&mut h, &k.to_le_bytes());
+    }
+    format!("{h:016x}")
+}
+
+/// The saved tracking of `params`, parsed once per content.
+fn saved_tracks(params: &Params) -> Option<Arc<TrackCache>> {
+    static C: OnceLock<Mutex<HashMap<u64, Arc<TrackCache>>>> = OnceLock::new();
+    let j = s(params, TRACKED);
+    if j.is_empty() {
+        return None;
+    }
+    let mut h = 0xcbf2_9ce4_8422_2325;
+    fnv(&mut h, j.as_bytes());
+    let c = C.get_or_init(Default::default);
+    if let Some(d) = c.lock().unwrap_or_else(|e| e.into_inner()).get(&h) {
+        return Some(d.clone());
+    }
+    let d = Arc::new(TrackCache::from_json(j)?);
+    let mut m = c.lock().unwrap_or_else(|e| e.into_inner());
+    if m.len() > 8 {
+        m.clear();
+    }
+    m.insert(h, d.clone());
+    Some(d)
+}
+
+/// A saved tracking that applies to a chain: its frames, keyed under the model that made them.
+pub(crate) struct SavedTracking {
+    cache: Arc<TrackCache>,
+    keys: BTreeMap<i64, u64>,
+}
+
+/// The saved tracking of `params` if it applies: the inputs are the instance's now. It does not depend
+/// on which model Settings choose or has loaded, so a project renders the same anywhere.
+fn saved_for(params: &Params, data: &RotoData, layer_size: [f64; 2], fps: f64) -> Option<SavedTracking> {
+    let cache = saved_tracks(params)?;
+    let keys = data.chain_keys(seed_with(params, layer_size, fps, &cache.model));
+    (tracks_key(&keys) == cache.key).then_some(SavedTracking { cache, keys })
+}
+
+/// Decode a tracked frame of saved tracking (full resolution).
+fn decode_tracked(cache: &TrackCache, f: i64) -> Option<FrameSeg> {
+    let fr = cache.frames.get(&f)?;
+    // The size comes from the project file: checked, so a corrupt one is ignored rather than overflowing.
+    let [w, h] = cache.size;
+    let n = w.checked_mul(h)?;
+    let matte = rle::decode(&fr.m)?;
+    let refine = rle::decode(&fr.r)?;
+    (matte.len() == n && refine.len() == n).then(|| FrameSeg { w, h, matte, refine, fg: fr.fg.clone(), bg: fr.bg.clone() })
+}
+
+/// The tracking a chain has just made, to save with its instance: every frame of its span that the
+/// tracker followed, at full resolution, with its trust. `None` when it followed none.
+pub fn tracks_of(ch: &Chain) -> Option<TrackCache> {
+    let model = ch.model.as_ref()?.info().id;
+    let mut size = None;
+    let mut frames = BTreeMap::new();
+    for (f, k) in &ch.keys {
+        let (Some(seg), Some(t)) = (cached(tracked_key(*k), 1.0), trust(*k)) else { continue };
+        size.get_or_insert([seg.w, seg.h]);
+        frames.insert(
+            *f,
+            TrackFrame { m: rle::encode(&seg.matte), r: rle::encode(&seg.refine), fg: seg.fg.clone(), bg: seg.bg.clone(), c: t.confidence, o: t.occluded },
+        );
+    }
+    let cache = TrackCache { key: tracks_key(&ch.keys), model: model.to_string(), size: size?, frames };
+    (!cache.frames.is_empty()).then_some(cache)
 }
 
 /// Encode one frame for [`FrozenCache`].

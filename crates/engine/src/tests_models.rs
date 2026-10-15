@@ -36,7 +36,9 @@ fn models_are_listed_chosen_and_verified() {
     for (prefix, model, task) in [("roto", "mobilesam", Task::Mask), ("face", "mediapipe-face", Task::Face)] {
         let list = s.execute_checked(&format!("{prefix}.models"), json!({})).unwrap();
         let ids: Vec<&str> = list["models"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
-        assert_eq!(ids, ["classical", model]);
+        // Roto Brush also offers SAM 2.1 Tiny (a video tracker; see crates/sam2).
+        let expect: Vec<&str> = if task == Task::Mask { vec!["classical", model, "sam2.1-hiera-tiny"] } else { vec!["classical", model] };
+        assert_eq!(ids, expect);
         let m = &list["models"][1];
         assert_eq!((m["licence"].as_str(), m["installed"].as_bool()), (Some("Apache-2.0"), Some(false)));
         assert!(m["url"].as_str().unwrap().starts_with("https://") && !m["authors"].as_str().unwrap().is_empty());
@@ -69,6 +71,23 @@ fn models_are_listed_chosen_and_verified() {
         s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
         assert!(crate::effects::roto::model_for(&params).is_none());
     }
+    // EFFECTCRAFT_SAM2=path/to/model.safetensors (facebook/sam2.1-hiera-tiny): installed with its
+    // notice, loaded (verified, native only) and used by Roto Brush 3.0, then dropped.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(path) = std::env::var("EFFECTCRAFT_SAM2") {
+        let r = s.execute_checked("roto.model.install", json!({"path": path})).unwrap();
+        assert_eq!(r["id"], "sam2.1-hiera-tiny");
+        let dir = s.models_dir().unwrap();
+        let notice = std::fs::read_to_string(dir.join("sam2.1-hiera-tiny.safetensors.NOTICE.txt")).unwrap();
+        assert!(notice.contains("Meta AI") && notice.contains("Apache-2.0"), "{notice}");
+        s.execute_checked("roto.model.select", json!({"id": "sam2.1-hiera-tiny"})).unwrap();
+        wait_loaded(&mut s, Task::Mask);
+        assert_eq!(s.models.status(Task::Mask).active.as_deref(), Some("sam2.1-hiera-tiny"));
+        let params = crate::effects::Params { values: [("version".to_string(), effectcraft_keyframe::Value::Enum(2))].into_iter().collect() };
+        assert_eq!(crate::effects::roto::model_for(&params).map(|m| m.info().id), Some("sam2.1-hiera-tiny"));
+        s.execute_checked("roto.model.select", json!({"id": "classical"})).unwrap();
+        assert!(crate::effects::roto::model_for(&params).is_none());
+    }
     // EFFECTCRAFT_FACE_LANDMARKER=path/to/face_landmarker.task: installed with its notice,
     // loaded for face tracking, dropped when the classic tracker is chosen, removed.
     if let Ok(path) = std::env::var("EFFECTCRAFT_FACE_LANDMARKER") {
@@ -84,5 +103,42 @@ fn models_are_listed_chosen_and_verified() {
         assert_eq!(s.execute_checked("face.model.remove", json!({"id": "mediapipe-face"})).unwrap()["removed"], true);
         assert!(!dir.join("face_landmarker.task").exists() && !dir.join("face_landmarker.task.NOTICE.txt").exists());
     }
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// A Roto Brush model that has been idle for ten minutes is unloaded (the choice stays), one in use is not,
+/// and a model that does not track use is never unloaded.
+#[test]
+fn an_idle_roto_model_is_unloaded() {
+    use effectcraft_segment::{Loaded, MaskModel, ModelInfo, Prompt};
+    struct Fake(Option<f64>);
+    impl MaskModel for Fake {
+        fn info(&self) -> &'static ModelInfo {
+            &effectcraft_segment::SAM2_TINY
+        }
+        fn segment(&self, _: &[[f32; 3]], _: usize, _: usize, _: &Prompt) -> effectcraft_segment::Result<Vec<f32>> {
+            Err("no weights".into())
+        }
+        fn idle_secs(&self) -> Option<f64> {
+            self.0
+        }
+    }
+    crate::tests_roto::hold_roto_cache_test_lock();
+    let (mut s, d) = session("idle");
+    for (idle, unloaded) in [(Some(5.0), false), (None, false), (Some(601.0), true)] {
+        let m: Arc<dyn MaskModel> = Arc::new(Fake(idle));
+        s.models.set_active(Task::Mask, Some(Loaded::Mask(m)));
+        assert_eq!(s.models.status(Task::Mask).active.as_deref(), Some("sam2.1-hiera-tiny"));
+        s.poll_models();
+        assert_eq!(s.models.status(Task::Mask).active.is_none(), unloaded, "idle {idle:?}");
+        assert_eq!(crate::effects::roto::installed_model().is_none(), unloaded, "the effect's model follows");
+        if unloaded {
+            assert!(s.events.iter().any(|e| matches!(e, crate::Event::Toast { message, .. } if message.contains("unloaded after 10 minutes"))));
+        }
+    }
+    // the choice survives, and with the classic engine chosen reloading does nothing
+    s.reload_roto_model();
+    assert!(s.models.status(Task::Mask).active.is_none());
+    crate::effects::roto::set_model(None);
     let _ = std::fs::remove_dir_all(d);
 }

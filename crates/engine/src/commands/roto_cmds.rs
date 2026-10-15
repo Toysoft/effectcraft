@@ -196,6 +196,8 @@ fn points_p(p: &Value, cmd: &str) -> Result<Vec<[f64; 2]>> {
 
 fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "roto.stroke";
+    // A model unloaded for being idle comes back before the stroke is segmented with it.
+    s.reload_roto_model();
     let (cid, lid) = match roto_p(s, p, cmd) {
         Ok((c, l, _)) => (c, l),
         Err(_) => layer_p(s, p, cmd)?,
@@ -431,6 +433,8 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
     out["strokeFrames"] = json!(d.stroke_frames());
     out["frozen"] = json!(frozen_of(&g));
     out["pending"] = json!(s.roto_pending.contains(&(cid, lid, uid)));
+    // The model Settings chose and whether this layer segments with it (propagate refuses or waits otherwise).
+    out["model"] = s.roto_model();
     out["limits"] = json!(rt::frame_limits(&comp, &layer));
     let frame = frame_p(s, p, cid, &layer);
     out["frame"] = json!(frame);
@@ -441,7 +445,7 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         let fps = comp.frame_rate.as_f64();
         let ps = params_static(&g);
         let chain = fx::Chain::new(&ps, size, fps, 1.0);
-        let seg = match chain.keys.get(&frame).and_then(|k| fx::cached(*k, 1.0)) {
+        let seg = match chain.cached_seg(frame, 1.0) {
             Some(sg) => Some(sg),
             None if compute => {
                 let index = layer.effects().and_then(|f| f.groups().position(|x| x.uid == uid)).unwrap_or(0);
@@ -462,6 +466,28 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
                 out["iou"] = json!(iou(&sg.matte, &gt));
             }
         }
+    }
+    // Where each frame's matte came from, and how far to trust it: frames a tracker followed
+    // report its confidence and whether the object was absent; frames the model segmented on
+    // their own report "model"; the rest came from the classic engine.
+    {
+        let size = rt::layer_size(&s.project, &comp, &layer);
+        let chain = fx::Chain::new(&params_static(&g), size, comp.frame_rate.as_f64(), 1.0);
+        let tracked: serde_json::Map<String, Value> = chain
+            .keys
+            .keys()
+            .filter_map(|f| chain.trust_at(*f).map(|t| (f.to_string(), json!({"confidence": t.confidence, "occluded": t.occluded}))))
+            .collect();
+        out["tracker"] = json!({"model": s.models_roto_active(), "device": fx::installed_model().and_then(|m| m.device_name()), "saved": chain.saved_model(), "frames": tracked});
+        let notice = s.roto_model_notice(s.uses_roto_model(cid, lid, uid)).or_else(|| s.saved_tracking_notice(chain.saved_model()));
+        out["notice"] = json!(notice);
+        out["source"] = json!(if tracked.contains_key(&frame.to_string()) {
+            "tracker"
+        } else if chain.model.is_some() {
+            "model"
+        } else {
+            "classical"
+        });
     }
     let computed = s.roto_computed(cid, lid, uid);
     out["computed"] = json!(computed.iter().filter(|(_, c)| **c).map(|(f, _)| *f).collect::<Vec<_>>());
