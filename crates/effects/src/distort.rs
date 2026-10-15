@@ -556,8 +556,20 @@ mod tests {
             let (a, b) = (o.img.get(pad, y + pad), im.get(0, y));
             assert!((0..4).all(|i| (a[i] - b[i]).abs() < 0.01), "row {y}: {a:?} vs {b:?}");
         }
-        let free = run("ec.distort.wavewarp", &[("direction", num(0.0)), ("height", num(5.0))], im);
+        let free = run("ec.distort.wavewarp", &[("direction", num(0.0)), ("height", num(5.0))], im.clone());
         assert!(free.img.data.iter().zip(&o.img.data).any(|(a, b)| differs(*a, *b)));
+        // #1181: direction 90° → vertical displacement. Top Edge (4) holds the first row,
+        // Bottom Edge (6) the last, and the rest of the layer still moves.
+        for (pin, edge_row) in [(Value::Enum(4), 0i64), (Value::Enum(6), 29i64)] {
+            let set = [("direction", num(90.0)), ("height", num(5.0)), ("pinning", pin)];
+            let o = run("ec.distort.wavewarp", &set, im.clone());
+            let pad = ((o.img.width - im.width) / 2) as i64;
+            for x in 0..40 {
+                let (a, b) = (o.img.get(x + pad, edge_row + pad), im.get(x, edge_row));
+                assert!((0..4).all(|i| (a[i] - b[i]).abs() < 0.01), "pin {edge_row} col {x}: {a:?} vs {b:?}");
+            }
+            assert!(o.img.data.iter().zip(im.data.iter()).any(|(a, b)| differs(*a, *b)), "pin {edge_row}: layer must still distort");
+        }
     }
 
     #[test]
