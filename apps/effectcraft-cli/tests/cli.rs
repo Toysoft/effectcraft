@@ -462,6 +462,32 @@ fn mcp_autosave_is_opt_in_and_rejects_invalid_combinations() {
     std::fs::remove_dir_all(config).unwrap();
 }
 
+/// `run`/`exec renderQueue.render` (#1426): a failed item is a command error, exit 1 like
+/// `render --queue`, not a success with the failure buried in the JSON.
+#[test]
+fn a_failed_render_under_run_and_exec_exits_1() {
+    let root = tmp("render-fails");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // The output's folder is a file, so the encoder cannot open the output.
+    let blocker = root.join("not-a-folder");
+    std::fs::write(&blocker, "x").unwrap();
+    let out = blocker.join("out.gif");
+    let add = json!({"comp": "T", "format": "gif", "output": out.to_str().unwrap()}).to_string();
+    let project = root.join("q.ecproj");
+    let steps = ["comp.new", r#"{"name":"T","width":16,"height":16,"duration":0.1}"#, "layer.newSolid", "{}", "renderQueue.add", &add];
+    ok_json(&[&["run", "--empty", "--save-as", project.to_str().unwrap()][..], &steps[..]].concat());
+
+    let (code, v) = run_json(&[&["run", "--empty"][..], &steps[..], &["renderQueue.render", r#"{"wait":true}"#][..]].concat());
+    assert_eq!(code, 1, "{v}");
+    let e = v["error"].as_str().unwrap_or_else(|| panic!("{v}"));
+    assert!(e.starts_with("renderQueue.render: T: "), "{e}");
+
+    let (code, v) = run_json(&["exec", "renderQueue.render", "--project", project.to_str().unwrap()]);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"].as_str().is_some_and(|e| e.starts_with("T: ")), "{v}");
+}
+
 /// `render --bitrate` (#440) targets the bitrate in VP9 WebM.
 #[test]
 fn render_bitrate_applies_to_vp9_webm() {
